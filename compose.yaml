@@ -1,0 +1,11 @@
+services:
+  inventory:
+    build: .
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      AAI_ADMIN_TOKEN: ${AAI_ADMIN_TOKEN:?set AAI_ADMIN_TOKEN}
+      AAI_ENROLLMENT_TOKEN: ${AAI_ENROLLMENT_TOKEN:?set AAI_ENROLLMENT_TOKEN}
+    volumes: ["inventory-data:/data"]
+    restart: unless-stopped
+volumes:
+  inventory-data:

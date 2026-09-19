@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an improvement without expanding collection unnecessarily
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What compliance or operational problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy impact
+      description: List any new endpoint data fields or permissions required.
+    validations:
+      required: true

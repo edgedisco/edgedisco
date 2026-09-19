@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Asset Inventory</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#263b35;--text:#effbf5;--muted:#92aaa2;--green:#4fe0a5;--amber:#ffcb66}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0,#12372d 0,transparent 35%),var(--bg);font:14px Inter,ui-sans-serif,system-ui;color:var(--text)}
+    main{max-width:1180px;margin:auto;padding:42px 24px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}h1{margin:0;font-size:28px;letter-spacing:-.5px}.sub{color:var(--muted);margin-top:6px}.btn{background:var(--green);color:#062119;text-decoration:none;font-weight:700;border-radius:8px;padding:10px 14px}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px}.card,.table-wrap,.login{background:linear-gradient(145deg,#13231f,#0c1714);border:1px solid var(--line);border-radius:14px}.card{padding:20px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:34px;font-weight:750;margin-top:7px}
+    .table-wrap{margin-top:20px;overflow:hidden}.toolbar{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center}.toolbar input{flex:1;background:#07110f;border:1px solid var(--line);color:var(--text);padding:10px;border-radius:8px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 18px;border-bottom:1px solid #1c2d28}th{color:var(--muted);font-size:11px;text-transform:uppercase}.pill{display:inline-block;border-radius:99px;padding:4px 8px;background:#1b332c;color:#a8f5d4;font-size:12px}.off{background:#282b29;color:#aeb9b5}.empty{text-align:center;color:var(--muted);padding:46px}.login{max-width:420px;margin:14vh auto;padding:28px}.login input{width:100%;background:#07110f;border:1px solid var(--line);color:var(--text);padding:12px;border-radius:8px;margin:18px 0 12px}.login button{width:100%;border:0;cursor:pointer}
+    @media(max-width:760px){.cards{grid-template-columns:repeat(2,1fr)}.hide-mobile{display:none}.top{align-items:flex-start;gap:20px}}
+  </style>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <h1>AI Asset Inventory</h1><div class="sub">Enter the administrator token.</div>
+  <form method="post" action="/login"><input type="password" name="token" autocomplete="current-password" required><button class="btn">Sign in</button></form>
+</div>
+<main id="app" hidden>
+  <div class="top"><div><h1>AI Asset Inventory</h1><div class="sub">Endpoint AI and agent compliance evidence</div></div><a class="btn" href="/api/v1/export.csv">Export CSV</a></div>
+  <section class="cards">
+    <div class="card"><div class="label">Enrolled devices</div><div id="devices" class="value">0</div></div>
+    <div class="card"><div class="label">Observed assets</div><div id="assets" class="value">0</div></div>
+    <div class="card"><div class="label">Running now</div><div id="running" class="value">0</div></div>
+    <div class="card"><div class="label">Active agents</div><div id="active_agents" class="value">0</div></div>
+    <div class="card"><div class="label">MCP servers</div><div id="mcp" class="value">0</div></div>
+  </section>
+  <section class="table-wrap">
+    <div class="toolbar"><strong>Evidence</strong><input id="filter" placeholder="Filter by app, vendor, device or type"></div>
+    <table><thead><tr><th>Asset</th><th>Device</th><th class="hide-mobile">Type</th><th>Status</th><th class="hide-mobile">Last seen</th></tr></thead><tbody id="rows"></tbody></table>
+    <div id="empty" class="empty" hidden>No matching assets.</div>
+  </section>
+</main>
+<script>
+let items=[];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function render(){const q=document.querySelector('#filter').value.toLowerCase();const rows=items.filter(x=>JSON.stringify(x).toLowerCase().includes(q));document.querySelector('#rows').innerHTML=rows.map(x=>`<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.vendor)}</div></td><td>${esc(x.hostname)}<div class="sub">${esc(x.os)}</div></td><td class="hide-mobile">${esc(x.kind)}</td><td><span class="pill ${x.running?'':'off'}">${x.running?'Running':'Observed'}</span></td><td class="hide-mobile">${esc(new Date(x.last_seen).toLocaleString())}</td></tr>`).join('');document.querySelector('#empty').hidden=rows.length>0}
+fetch('/api/v1/summary').then(r=>{if(r.status===401)throw Error('auth');return r.json()}).then(d=>{items=d.items;for(const k of ['devices','assets','running','active_agents'])document.querySelector('#'+k).textContent=d[k];document.querySelector('#mcp').textContent=d.mcp_servers;document.querySelector('#app').hidden=false;render()}).catch(()=>document.querySelector('#login').hidden=false);
+document.querySelector('#filter').addEventListener('input',render);
+</script>
+</body>
+</html>

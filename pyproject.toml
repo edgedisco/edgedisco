@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-asset-inventory"
+version = "0.2.0"
+description = "Privacy-preserving endpoint inventory for local AI applications and agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+authors = [{name = "Trust3 AI"}]
+dependencies = []
+urls = {Homepage = "https://github.com/nsabharwal/edgedisco", Repository = "https://github.com/nsabharwal/edgedisco", Issues = "https://github.com/nsabharwal/edgedisco/issues"}
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security"
+]
+
+[project.scripts]
+ai-inventory = "ai_asset_inventory.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ai_asset_inventory = ["dashboard.html"]
