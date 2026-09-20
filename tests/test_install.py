@@ -21,7 +21,7 @@ from ai_asset_inventory.database import Database
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = (REPO / "install.sh").read_text()
-COMMANDS = ("server", "agent", "hook", "adapters", "setup", "status",
+COMMANDS = ("server", "agent", "hook", "adapters", "setup", "status", "dashboard",
             "uninstall", "mcp", "demo")
 
 

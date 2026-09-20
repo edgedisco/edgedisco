@@ -508,6 +508,25 @@ def status(root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def open_dashboard(root: Path | None = None, *, browser_fn=webbrowser.open) -> str:
+    """Open a fresh authenticated local dashboard without exposing its token."""
+    layout = default_layout(root)
+    values = _parse_env(layout.env)
+    admin_token = values.get("AAI_ADMIN_TOKEN")
+    if not admin_token:
+        raise RuntimeError(f"Missing administrator credential in {layout.env}")
+    try:
+        port = int(values.get("EDGEDISCO_PORT", "8080"))
+    except ValueError:
+        raise RuntimeError(f"Invalid EDGEDISCO_PORT in {layout.env}") from None
+    if _health(port, admin_token) is None:
+        raise RuntimeError(f"EdgeDisco server on port {port} is unavailable or rejected its credential")
+    url = _verify_browser_bootstrap(port, admin_token)
+    if not browser_fn(url):
+        raise RuntimeError("Could not open the dashboard in a browser")
+    return f"http://127.0.0.1:{port}"
+
+
 @dataclass(frozen=True)
 class LocalServer:
     """Local EdgeDisco server endpoint used by setup and demo flows."""

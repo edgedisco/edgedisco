@@ -362,7 +362,7 @@ If EdgeDisco was previously installed with the quick installer, keep that instal
 make check
 bash ./install.sh --yes --no-open
 edgedisco status
-edgedisco demo
+edgedisco dashboard
 ```
 
 Running `./install.sh` by path makes the installer package the current checkout, including commits and uncommitted files; it does not download GitHub `main`. Conversely, piping or downloading the installer from GitHub tests the published branch and cannot test an unpushed change. If the existing installation uses a custom root, pass the same value for the upgrade:
@@ -391,6 +391,8 @@ print({
 })
 PY
 ```
+
+`edgedisco dashboard` requests a fresh, single-use local browser bootstrap and opens an authenticated session without printing or placing the administrator token in the URL. Opening the plain dashboard URL in a new browser session still shows the login form by design. Use `edgedisco demo` separately when you also want to generate labeled synthetic evidence.
 
 Also verify that the dashboard contains fresh inventory, that starting and stopping a supported agent changes process evidence after a polling interval, and that a new session in a hooked application creates runtime events and session state. Demo or SDK events verify transport but do not prove native application-hook invocation. The test should not require Full Disk Access, Accessibility, Screen Recording, or other new macOS privacy permissions; investigate an unexpected prompt instead of granting it.
 

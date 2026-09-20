@@ -18,6 +18,7 @@ from ai_asset_inventory.self_service import (
     default_layout,
     ensure_credentials,
     install_cli_launcher,
+    open_dashboard,
     ensure_local_server,
     setup_macos,
     _restart_service,
@@ -58,6 +59,29 @@ class FakeAgentClient:
 
 
 class SelfServiceTests(unittest.TestCase):
+    @patch("ai_asset_inventory.self_service._verify_browser_bootstrap")
+    @patch("ai_asset_inventory.self_service._health", return_value={"assets": 1})
+    def test_dashboard_opens_fresh_authenticated_session_without_exposing_token(self, _health, bootstrap):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".edgedisco"
+            root.mkdir()
+            (root / "server.env").write_text(
+                "export AAI_ADMIN_TOKEN=private-admin-token\nexport EDGEDISCO_PORT=8765\n"
+            )
+            bootstrap.return_value = "http://127.0.0.1:8765/browser-bootstrap/one-time-code"
+            browser = unittest.mock.Mock(return_value=True)
+            self.assertEqual(open_dashboard(root, browser_fn=browser), "http://127.0.0.1:8765")
+            _health.assert_called_once_with(8765, "private-admin-token")
+            bootstrap.assert_called_once_with(8765, "private-admin-token")
+            browser.assert_called_once_with(bootstrap.return_value)
+
+    def test_dashboard_fails_closed_when_credential_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".edgedisco"
+            root.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "Missing administrator credential"):
+                open_dashboard(root)
+
     @patch("ai_asset_inventory.self_service.urllib.request.urlopen", side_effect=ConnectionResetError())
     def test_health_treats_shutdown_connection_reset_as_stopped(self, _urlopen):
         self.assertIsNone(_health(8090))

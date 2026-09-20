@@ -164,8 +164,8 @@ if [[ ! -x "$PUBLIC" ]]; then
   exit 1
 fi
 FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME "$PUBLIC" --help)"
-if [[ "$FRESH_HELP" != *"demo"* ]]; then
-  echo "The managed EdgeDisco launcher is missing the demo subcommand." >&2
+if [[ "$FRESH_HELP" != *"demo"* || "$FRESH_HELP" != *"dashboard"* ]]; then
+  echo "The managed EdgeDisco launcher is missing required subcommands." >&2
   exit 1
 fi
 cat <<EOF
@@ -174,6 +174,7 @@ EdgeDisco installation verified.
 CLI: $PUBLIC
 Open a new Terminal window, then run:
   edgedisco status
+  edgedisco dashboard
   edgedisco demo
   edgedisco uninstall
 

@@ -10,7 +10,7 @@ from .server import serve
 from .runtime import MAX_HOOK_INPUT_BYTES, RuntimeClient
 from .adapters import install_adapters
 from .demo import run_demo
-from .self_service import setup_macos, status as self_service_status, uninstall_macos
+from .self_service import open_dashboard, setup_macos, status as self_service_status, uninstall_macos
 
 
 def parser() -> argparse.ArgumentParser:
@@ -46,6 +46,8 @@ def parser() -> argparse.ArgumentParser:
     setup.add_argument("--no-open", action="store_true")
     status = sub.add_parser("status", help="show self-service installation status")
     status.add_argument("--root", type=Path)
+    dashboard = sub.add_parser("dashboard", help="open the authenticated local dashboard")
+    dashboard.add_argument("--root", type=Path)
     uninstall = sub.add_parser("uninstall", help="remove macOS background services")
     uninstall.add_argument("--root", type=Path)
     uninstall.add_argument("--purge", action="store_true", help="also delete local data")
@@ -103,6 +105,9 @@ def main() -> None:
         result = self_service_status(args.root)
         for key, value in result.items():
             print(f"{key.replace('_', ' ').title()}: {value}")
+        return
+    if args.command == "dashboard":
+        print(f"Dashboard: {open_dashboard(args.root)}")
         return
     if args.command == "uninstall":
         result = uninstall_macos(

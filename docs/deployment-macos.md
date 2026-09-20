@@ -132,12 +132,14 @@ From the source checkout containing the changes to test:
 ```bash
 bash ./install.sh --yes --no-open
 edgedisco status
-edgedisco demo
+edgedisco dashboard
 ```
 
 The local installer installs this checkout into the managed venv and upgrades the existing configuration. The downloaded installer instead tests published `main`; it cannot test unpushed changes. Honor a custom `EDGEDISCO_HOME` if the existing installation uses one. Do not uninstall, purge, or replace the current configuration for this test.
 
-Verify preserved device identity/custom settings, config version 2, healthy server and agent services, authenticated demo dashboard access, and fresh inventory. Start and stop an actual supported agent and refresh the dashboard after a polling interval. Finally start a fresh session in a hooked application and confirm new runtime events and session state. Synthetic demo or SDK events test transport, not native application hook invocation. No Full Disk Access, Accessibility, or Screen Recording permission should be required; stop and investigate unexpected prompts rather than granting them.
+`edgedisco dashboard` creates a fresh one-time browser bootstrap, so developers do not need to display or copy the administrator token. The plain dashboard URL still requires an existing session or manual sign-in. Run `edgedisco demo` separately when synthetic lab evidence is wanted.
+
+Verify preserved device identity/custom settings, config version 2, healthy server and agent services, authenticated dashboard access, and fresh inventory. Start and stop an actual supported agent and refresh the dashboard after a polling interval. Finally start a fresh session in a hooked application and confirm new runtime events and session state. Synthetic demo or SDK events test transport, not native application hook invocation. No Full Disk Access, Accessibility, or Screen Recording permission should be required; stop and investigate unexpected prompts rather than granting them.
 
 ## Uninstall
 
