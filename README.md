@@ -344,15 +344,57 @@ The built-in MCP listener deliberately refuses non-localhost binding. For remote
 
 ## Development
 
-Canonical test command from a source checkout:
+Run the complete local checks from a source checkout before modifying an installed system:
 
 ```bash
-make test
+make check
 ```
 
-`make test` configures the `src/` import path for you. Running `python3 -m unittest discover -s tests -v` against Homebrew Python **without** installing the package fails with `ModuleNotFoundError: No module named 'ai_asset_inventory'` because this project uses a `src/` layout. After `python -m pip install -e .` in the project venv, the same unittest command works because the package is installed into that environment.
+`make check` runs the tests, Python 3.9 syntax validation, bytecode compilation, and shell syntax checks. `make test` runs only the test suite. Both targets configure the `src/` import path for you. Running `python3 -m unittest discover -s tests -v` against Homebrew Python **without** installing the package fails with `ModuleNotFoundError: No module named 'ai_asset_inventory'` because this project uses a `src/` layout. After `python -m pip install -e .` in the project venv, the same unittest command works because the package is installed into that environment.
 
-Use the developer environment for isolated regression tests, but use an **installer-managed installation** for final macOS upgrade/end-to-end verification. An editable checkout does not exercise package replacement or real LaunchAgents. See the [final installed-system test checklist](docs/deployment-macos.md#final-installed-system-test). Dashboard JavaScript tests also run when Node is available.
+### Test an unpushed change through the macOS installer
+
+Use the developer environment for isolated regression tests, but use an **installer-managed installation** for final macOS upgrade/end-to-end verification. An editable install does not exercise package replacement, configuration migration, rollback, or real LaunchAgents.
+
+If EdgeDisco was previously installed with the quick installer, keep that installation in place. From the checkout containing the changes, run:
+
+```bash
+make check
+bash ./install.sh --yes --no-open
+edgedisco status
+edgedisco demo
+```
+
+Running `./install.sh` by path makes the installer package the current checkout, including commits and uncommitted files; it does not download GitHub `main`. Conversely, piping or downloading the installer from GitHub tests the published branch and cannot test an unpushed change. If the existing installation uses a custom root, pass the same value for the upgrade:
+
+```bash
+EDGEDISCO_HOME=/existing/installation/root bash ./install.sh --yes --no-open
+```
+
+The installer validates the existing configuration and database, stops the LaunchAgents, creates a protected snapshot under the installation's `backups/` directory, upgrades the managed virtual environment, migrates supported configuration versions without replacing custom settings or enrollment, and verifies the restarted services. A failed upgrade automatically attempts to restore the snapshot. Do not uninstall or purge the existing installation before this test; doing so would bypass the upgrade and migration paths.
+
+Confirm migration without printing credentials:
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+root = Path.home() / ".edgedisco"  # Match EDGEDISCO_HOME when customized.
+config = json.loads((root / "agent.json").read_text())
+print({
+    "config_version": config.get("config_version"),
+    "server_url": config.get("server_url"),
+    "has_device_token": bool(config.get("device_token")),
+    "process_poll_interval_seconds": config.get("process_poll_interval_seconds"),
+    "static_scan_interval_seconds": config.get("static_scan_interval_seconds"),
+})
+PY
+```
+
+Also verify that the dashboard contains fresh inventory, that starting and stopping a supported agent changes process evidence after a polling interval, and that a new session in a hooked application creates runtime events and session state. Demo or SDK events verify transport but do not prove native application-hook invocation. The test should not require Full Disk Access, Accessibility, Screen Recording, or other new macOS privacy permissions; investigate an unexpected prompt instead of granting it.
+
+See the [full installed-system checklist and recovery instructions](docs/deployment-macos.md#final-installed-system-test). Dashboard JavaScript tests run automatically when Node is available.
 
 Build a wheel:
 
