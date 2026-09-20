@@ -2,7 +2,8 @@
 
 Privacy-preserving endpoint discovery for local AI applications, agent frameworks, and MCP servers.
 
-EdgeDisco is an open-source project created and owned by [Neeraj Sabharwal](https://www.linkedin.com/in/neerajsabharwal/). 
+EdgeDisco is an open-source project created and owned by [Neeraj Sabharwal](https://www.linkedin.com/in/neerajsabharwal/). It is licensed under the GNU Affero General Public License v3.0.
+
 EdgeDisco runs a lightweight collector on macOS, Windows, or Linux and sends sanitized inventory and agent lifecycle evidence to a central compliance dashboard. It answers two enterprise questions: **which AI tools are present, and which agents are actually running inside them?**
 
 > Status: pilot-ready MVP. Review the [production hardening checklist](docs/production-hardening.md) before a broad enterprise rollout.
@@ -23,6 +24,7 @@ This project provides a focused inventory layer without collecting employee cont
 - Inventories MCP server names, transport types, and executable basenames
 - Records first seen, last seen, device, OS, vendor, type, and running state
 - Provides a centralized dashboard and CSV evidence export
+- Exposes sanitized compliance inventory through an optional read-only MCP server
 - Uses unique device upload credentials after enrollment
 - Works without third-party Python runtime dependencies
 
@@ -60,6 +62,7 @@ See [Architecture](docs/architecture.md) for the data flow and trust boundaries.
 ## Requirements
 
 - Python 3.9 or newer
+- Python 3.10 or newer for the optional MCP server
 - macOS, Windows, or Linux
 - Permission to list local processes
 - HTTPS ingress for any non-local deployment
@@ -221,6 +224,80 @@ The included Compose configuration binds the server to localhost. Put it behind 
 
 For API access, pass `Authorization: Bearer <token>`.
 
+## Read-only MCP server
+
+EdgeDisco can expose its centralized compliance inventory to MCP clients. The MCP component is optional so endpoint collectors can continue to run on Python 3.9. The MCP server uses the official MCP Python SDK and requires Python 3.10 or newer.
+
+Install the MCP extra from a source checkout:
+
+```bash
+python3.11 -m venv .mcp-venv
+. .mcp-venv/bin/activate
+python -m pip install '.[mcp]'
+```
+
+Start the MCP server against the local EdgeDisco evidence database:
+
+```bash
+edgedisco mcp \
+  --db ~/.edgedisco/data/inventory.db \
+  --host 127.0.0.1 \
+  --port 8081
+```
+
+The Streamable HTTP endpoint is:
+
+```text
+http://127.0.0.1:8081/mcp
+```
+
+Available tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `get_compliance_summary` | Return fleet counts for devices, assets, agents, sessions, and MCP servers |
+| `list_devices` | List enrolled endpoint metadata |
+| `list_ai_assets` | List sanitized AI application and runtime inventory |
+| `list_running_agents` | List currently observed agent runtimes |
+| `list_agent_sessions` | List sanitized agent lifecycle evidence |
+| `list_mcp_servers` | List discovered MCP servers without arguments or secrets |
+
+Every tool call is written to `~/.edgedisco/data/mcp-audit.jsonl`. Results are capped at 500 records. The tools do not return prompts, responses, code, credentials, environment values, raw commands, tool arguments, path hashes, command hashes, or user and workspace hashes.
+
+### Test MCP with the Inspector
+
+The current MCP Inspector requires Node.js 22.19 or newer:
+
+```bash
+node --version
+npx @modelcontextprotocol/inspector \
+  --server-url http://127.0.0.1:8081/mcp \
+  --transport http
+```
+
+List tools from the command line:
+
+```bash
+npx @modelcontextprotocol/inspector --cli \
+  http://127.0.0.1:8081/mcp \
+  --transport http \
+  --method tools/list \
+  --format json
+```
+
+Call the compliance summary:
+
+```bash
+npx @modelcontextprotocol/inspector --cli \
+  http://127.0.0.1:8081/mcp \
+  --transport http \
+  --method tools/call \
+  --tool-name get_compliance_summary \
+  --format json
+```
+
+The built-in MCP listener deliberately refuses non-localhost binding. For remote access, keep EdgeDisco bound to localhost and place it behind an authenticated HTTPS reverse proxy or API gateway that implements OAuth 2.1 bearer-token validation. Do not expose port 8081 directly to a network.
+
 ## Development
 
 Run the automated tests:
@@ -242,6 +319,7 @@ The GitHub Actions workflow runs the test suite on Python 3.9 through 3.13. See 
 - Ordinary browser-tab usage is not detected. That requires an approved browser extension, DNS/SWG telemetry, or browser-management integration.
 - Agents that execute entirely inside a SaaS control plane are not visible to endpoint hooks and require that platform's audit or inventory API.
 - The central server uses SQLite and one administrator role.
+- The built-in MCP listener is localhost-only; production remote MCP authentication must be supplied by an HTTPS proxy or API gateway.
 - Automated retention, device-token revocation, and SSO are not implemented.
 - Detection is signature-based and should be aligned with the organization's approved and prohibited application catalog.
 - A native signed installer is not included; the macOS self-service installer is a reviewable shell script.
@@ -259,6 +337,8 @@ Before installing on employee devices:
 
 See [SECURITY.md](SECURITY.md) for the security model and private reporting guidance.
 
-## License
+## Ownership and license
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Copyright © 2026 [Neeraj Sabharwal](https://www.linkedin.com/in/neerajsabharwal/).
+
+EdgeDisco is licensed under the [GNU Affero General Public License v3.0](LICENSE). Modified versions made available over a network must also make their corresponding source code available under the same license.

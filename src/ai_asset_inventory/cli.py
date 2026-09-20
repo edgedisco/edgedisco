@@ -49,6 +49,11 @@ def parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--root", type=Path)
     uninstall.add_argument("--purge", action="store_true", help="also delete local data")
     uninstall.add_argument("--yes", action="store_true", help="confirm data deletion")
+    mcp = sub.add_parser("mcp", help="run the read-only MCP compliance server")
+    mcp.add_argument("--db", type=Path, default=Path.home() / ".edgedisco/data/inventory.db")
+    mcp.add_argument("--host", default="127.0.0.1")
+    mcp.add_argument("--port", type=int, default=8081)
+    mcp.add_argument("--audit-log", type=Path)
     return root
 
 
@@ -99,6 +104,10 @@ def main() -> None:
             print("Local configuration, credentials, logs, and evidence removed")
         else:
             print(f"Local data retained at {result['root']}")
+        return
+    if args.command == "mcp":
+        from .mcp_server import serve as serve_mcp
+        serve_mcp(args.db, args.host, args.port, args.audit_log)
         return
     if args.agent_command == "init-config":
         write_example_config(args.config)

@@ -180,6 +180,76 @@ class Database:
         }
 
     @staticmethod
+    def _result_limit(limit: int) -> int:
+        return max(1, min(int(limit), 500))
+
+    def compliance_counts(self) -> dict[str, int]:
+        summary = self.summary()
+        return {
+            key: int(summary[key])
+            for key in (
+                "devices", "assets", "running", "active_agents", "active_sessions",
+                "agent_sessions", "mcp_servers",
+            )
+        }
+
+    def list_devices(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute("""
+                SELECT id AS device_id,hostname,os,os_version,machine,agent_version,
+                       enrolled_at,last_seen
+                FROM devices ORDER BY last_seen DESC LIMIT ?
+            """, (self._result_limit(limit),))
+            return [dict(row) for row in rows]
+
+    def list_assets(self, *, kind: str | None = None, running_only: bool = False,
+                    limit: int = 100) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if kind:
+            clauses.append("a.kind=?")
+            parameters.append(str(kind)[:64])
+        if running_only:
+            clauses.append("a.running=1")
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(self._result_limit(limit))
+        with self.connect() as conn:
+            rows = conn.execute(f"""
+                SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
+                       a.running,a.first_seen,a.last_seen
+                FROM assets a JOIN devices d ON d.id=a.device_id
+                {where} ORDER BY a.last_seen DESC LIMIT ?
+            """, parameters)
+            result = [dict(row) for row in rows]
+        for row in result:
+            row["running"] = bool(row["running"])
+        return result
+
+    def list_agent_sessions(self, *, status: str | None = None,
+                            app: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        active_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        clauses: list[str] = []
+        parameters: list[Any] = [active_cutoff]
+        if status:
+            clauses.append("s.status=?")
+            parameters.append(str(status)[:32])
+        if app:
+            clauses.append("s.app=?")
+            parameters.append(str(app)[:64])
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(self._result_limit(limit))
+        with self.connect() as conn:
+            rows = conn.execute(f"""
+                SELECT s.device_id,d.hostname,d.os,s.app,s.agent_type,s.model,
+                       CASE WHEN s.status='active' AND s.last_seen<? THEN 'stale' ELSE s.status END AS status,
+                       s.first_seen,s.last_seen,s.last_event,s.event_count,s.tool_count,
+                       s.mcp_count,s.duration_ms
+                FROM agent_sessions s JOIN devices d ON d.id=s.device_id
+                {where} ORDER BY s.last_seen DESC LIMIT ?
+            """, parameters)
+            return [dict(row) for row in rows]
+
+    @staticmethod
     def _session_status(event: dict[str, Any]) -> str:
         event_type = str(event["event_type"]).lower()
         if event_type in {"sessionend", "subagentstop", "taskcompleted"}:

@@ -2,6 +2,15 @@
 
 All notable project changes are documented here.
 
+## 0.5.0
+
+- Added an optional read-only MCP server using the official MCP Python SDK.
+- Added MCP tools for compliance counts, devices, AI assets, running agents, agent sessions, and discovered MCP servers.
+- Added bounded query results and metadata-only response schemas.
+- Added a JSONL audit trail for every MCP tool call.
+- Restricted the built-in MCP listener to localhost; remote deployments must use an authenticated HTTPS reverse proxy.
+- Preserved Python 3.9 support for the endpoint collector while requiring Python 3.10+ only for the optional MCP component.
+
 ## 0.4.0
 
 - Added a one-command, no-sudo macOS installer.

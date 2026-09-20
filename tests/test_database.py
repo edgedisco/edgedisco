@@ -22,6 +22,10 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(summary["devices"], 1)
             self.assertEqual(summary["running"], 1)
             self.assertEqual(summary["items"][0]["name"], "Claude")
+            self.assertEqual(db.list_devices()[0]["hostname"], "mac-01")
+            self.assertEqual(db.list_assets(running_only=True)[0]["name"], "Claude")
+            self.assertEqual(db.list_assets(kind="mcp_server"), [])
+            self.assertEqual(db.compliance_counts()["devices"], 1)
 
     def test_unknown_token_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -45,6 +49,9 @@ class DatabaseTests(unittest.TestCase):
             summary = db.summary()
             self.assertEqual(summary["active_sessions"], 1)
             self.assertEqual(summary["session_items"][0]["tool_count"], 1)
+            sessions = db.list_agent_sessions(status="active", app="cursor")
+            self.assertEqual(len(sessions), 1)
+            self.assertNotIn("session_hash", sessions[0])
 
 
 if __name__ == "__main__":

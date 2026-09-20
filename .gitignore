@@ -15,3 +15,6 @@ data/
 logs/
 *.pid
 .edgedisco/
+
+.mcp-venv/
+venv/
