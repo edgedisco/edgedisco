@@ -53,6 +53,29 @@ class ServerTests(unittest.TestCase):
             urllib.request.urlopen(self.base + "/api/v1/summary")
         self.assertEqual(caught.exception.code, 401)
 
+    def test_csv_exports_are_admin_only_and_downloadable(self):
+        exports = {
+            "/api/v1/export.csv": "ai-asset-inventory.csv",
+            "/api/v1/agent-sessions.csv": "edgedisco-agent-sessions.csv",
+            "/api/v1/runtime-events.csv": "edgedisco-runtime-events.csv",
+        }
+        for path, filename in exports.items():
+            with self.subTest(path=path):
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(self.base + path)
+                self.assertEqual(caught.exception.code, 401)
+                request = urllib.request.Request(
+                    self.base + path, headers={"Authorization": "Bearer admin"},
+                )
+                with urllib.request.urlopen(request) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers.get_content_type(), "text/csv")
+                    self.assertEqual(response.headers.get_content_charset(), "utf-8")
+                    self.assertEqual(response.headers["Content-Disposition"], f"attachment; filename={filename}")
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+                    self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+                    self.assertTrue(response.read())
+
     def test_private_inventory_metadata_is_rejected_before_storage(self):
         _, enrolled = self.post("/api/v1/enroll", "enroll", {"hostname": "test", "os": "Linux"})
         payload = {"scan_id": "private", "observed_at": "2026-09-20T00:00:00+00:00",
@@ -129,6 +152,7 @@ class ServerTests(unittest.TestCase):
         with opener.open(self.base + "/") as response:
             html = response.read().decode()
         self.assertNotIn(self.server.admin_token, html)
+        self.assertIn('/api/v1/runtime-events.csv', html)
         self.assertTrue(any(cookie.name == "aai_session" and cookie.has_nonstandard_attr("HttpOnly") for cookie in jar))
         with opener.open(self.base + "/api/v1/summary") as response:
             self.assertEqual(response.status, 200)

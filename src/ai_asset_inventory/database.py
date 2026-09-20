@@ -44,6 +44,19 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _csv_safe_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep endpoint-controlled strings from becoming spreadsheet formulas."""
+    safe = {}
+    for key, value in row.items():
+        if isinstance(value, str) and (
+            value.startswith(("\t", "\r", "\n"))
+            or value.lstrip().startswith(("=", "+", "-", "@"))
+        ):
+            value = "'" + value
+        safe[key] = value
+    return safe
+
+
 class Database:
     def __init__(self, path: Path, *, otlp_enabled: bool = False,
                  otlp_max_pending: int = OTLP_MAX_PENDING,
@@ -502,37 +515,89 @@ class Database:
     def export_csv(self) -> str:
         output = io.StringIO()
         fields = [
-            "device_id", "hostname", "os", "kind", "name", "vendor", "version",
+            "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "fingerprint", "kind", "name", "vendor", "version",
+            "discovery_source", "executable", "package", "configured_in", "transport",
+            "host_app", "runtime", "relationship", "instance_count", "demo_lab",
+            "evidence_label", "observed_running", "path_hash", "command_hash",
             "binary_sha256", "binary_fingerprint_status", "fingerprint_library_version",
-            "running", "first_seen", "last_seen", "stale",
+            "status", "running", "first_seen", "last_seen", "stale",
         ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         with self.connect() as conn:
-            for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
+            for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,d.os_version,d.machine,d.agent_version,
+                a.fingerprint,a.kind,a.name,a.vendor,a.version,a.metadata_json,a.path_hash,a.command_hash,
                 a.binary_sha256,a.binary_fingerprint_status,a.fingerprint_library_version,
                 (a.running AND {FRESH_SCAN}) AS running,a.first_seen,a.last_seen,(NOT {FRESH_SCAN}) AS stale
                 FROM assets a JOIN devices d ON d.id=a.device_id ORDER BY a.last_seen DESC"""):
                 item = dict(row)
+                metadata = json.loads(item.pop("metadata_json"))
+                for key in (
+                    "discovery_source", "executable", "package", "configured_in", "transport",
+                    "host_app", "runtime", "relationship", "instance_count", "demo_lab",
+                    "evidence_label", "observed_running",
+                ):
+                    item[key] = metadata.get(key)
+                item["discovery_source"] = item["discovery_source"] or {
+                    "application": "Application inventory",
+                    "process": "Process snapshot",
+                    "agent_runtime": "Process inference",
+                    "mcp_server": "MCP configuration",
+                }.get(item["kind"], "Inventory scan")
                 item["running"] = bool(item["running"])
                 item["stale"] = bool(item["stale"])
-                writer.writerow(item)
+                item["status"] = (
+                    "Stale" if item["stale"] else
+                    "Running" if item["running"] else
+                    "Fixture stopped" if item["demo_lab"] else
+                    "Stopped" if item["kind"] in {"process", "agent_runtime"} else
+                    "Observed"
+                )
+                writer.writerow(_csv_safe_row(item))
         return output.getvalue()
 
     def export_agent_sessions_csv(self) -> str:
         output = io.StringIO()
         fields = [
-            "device_id", "hostname", "os", "app", "agent_type", "model", "status",
-            "first_seen", "last_seen", "last_event", "event_count", "tool_count", "mcp_count",
-            "duration_ms",
+            "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "session_hash", "agent_hash", "app", "agent_type", "model", "status",
+            "workspace_hash", "user_hash", "first_seen", "last_seen", "last_event",
+            "event_count", "tool_count", "mcp_count", "duration_ms",
         ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
         with self.connect() as conn:
-            for row in conn.execute("""SELECT s.device_id,d.hostname,d.os,s.app,s.agent_type,s.model,
+            for row in conn.execute("""SELECT s.device_id,d.hostname,d.os,d.os_version,d.machine,d.agent_version,
+                s.session_hash,s.agent_hash,s.app,s.agent_type,s.model,
                 CASE WHEN s.status='active' AND s.last_seen<? THEN 'stale' ELSE s.status END AS status,
-                s.first_seen,s.last_seen,s.last_event,s.event_count,s.tool_count,s.mcp_count,s.duration_ms
+                s.workspace_hash,s.user_hash,s.first_seen,s.last_seen,s.last_event,
+                s.event_count,s.tool_count,s.mcp_count,s.duration_ms
                 FROM agent_sessions s JOIN devices d ON d.id=s.device_id ORDER BY s.last_seen DESC""", (cutoff,)):
-                writer.writerow(dict(row))
+                writer.writerow(_csv_safe_row(dict(row)))
+        return output.getvalue()
+
+    def export_runtime_events_csv(self) -> str:
+        output = io.StringIO()
+        fields = [
+            "event_id", "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "observed_at", "received_at", "app", "event_type", "session_hash", "agent_hash",
+            "agent_type", "tool_name", "mcp_server", "model", "status", "duration_ms",
+            "workspace_hash", "user_hash", "source_event", "cursor_version", "permission_mode", "source",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        with self.connect() as conn:
+            for row in conn.execute("""SELECT e.id AS event_id,e.device_id,d.hostname,d.os,d.os_version,
+                d.machine,d.agent_version,e.observed_at,e.received_at,e.app,e.event_type,
+                e.session_hash,e.agent_hash,e.agent_type,e.tool_name,e.mcp_server,e.model,e.status,
+                e.duration_ms,e.workspace_hash,e.user_hash,e.metadata_json
+                FROM runtime_events e JOIN devices d ON d.id=e.device_id
+                ORDER BY e.observed_at DESC,e.id DESC"""):
+                item = dict(row)
+                metadata = json.loads(item.pop("metadata_json"))
+                for key in ("source_event", "cursor_version", "permission_mode", "source"):
+                    item[key] = metadata.get(key)
+                writer.writerow(_csv_safe_row(item))
         return output.getvalue()

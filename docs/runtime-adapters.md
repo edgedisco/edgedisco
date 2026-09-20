@@ -60,6 +60,8 @@ with edgedisco.session(agent_type="research-agent", model="example-model") as se
 
 The SDK writes to the same local event spool as native hooks. The endpoint collector sends the events using its device credential.
 
+Administrators can export the aggregated session projection from `/api/v1/agent-sessions.csv` and the individual, sanitized event history from `/api/v1/runtime-events.csv`. Both exports include pseudonymous session, agent, workspace, and user hashes for correlation; they never contain the original identifiers or workspace paths.
+
 ## Offline behavior
 
 Hooks only append normalized events to a local file. They do not make network requests and do not block the host agent if collection fails. The collector rotates the spool under a cross-platform file lock, uploads at most 1,000 events per batch, and relies on server-side event IDs for deduplication.

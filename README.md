@@ -288,11 +288,14 @@ The included Compose configuration binds the server to localhost. Put it behind 
 | `POST` | `/api/v1/reports` | Device token | Upload sanitized inventory |
 | `POST` | `/api/v1/runtime-events` | Device token | Upload sanitized agent lifecycle events |
 | `GET` | `/api/v1/summary` | Admin token or session | Read fleet inventory |
-| `GET` | `/api/v1/export.csv` | Admin token or session | Export compliance evidence |
-| `GET` | `/api/v1/agent-sessions.csv` | Admin token or session | Export agent-session evidence |
+| `GET` | `/api/v1/export.csv` | Admin token or session | Export asset evidence and privacy-safe fingerprints |
+| `GET` | `/api/v1/agent-sessions.csv` | Admin token or session | Export aggregated agent-session evidence |
+| `GET` | `/api/v1/runtime-events.csv` | Admin token or session | Export individual runtime lifecycle events |
 | `GET` | `/healthz` | None | Health check |
 
 For API access, pass `Authorization: Bearer <token>`.
+
+The asset export includes device metadata, logical/path/command fingerprints, binary integrity evidence, source attribution, runtime relationships, status, and timestamps. The session and event exports include pseudonymous correlation hashes but never raw user identities or workspace paths. Metadata is flattened into a fixed allowlist rather than exporting arbitrary JSON. All exports include the complete stored result set, neutralize spreadsheet formula prefixes, disable response caching, and require administrator access.
 
 ## Read-only MCP server
 

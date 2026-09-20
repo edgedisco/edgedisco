@@ -124,8 +124,94 @@ class ReviewRegressions(unittest.TestCase):
         self.db.ingest(self.device, report("large", [asset(i) for i in range(501)]))
         events = [normalize_hook_event("sdk", "sessionStart", {"session_id": str(i)}) for i in range(501)]
         self.db.ingest_runtime_events(self.device, events)
-        for exported in (self.db.export_csv(), self.db.export_agent_sessions_csv()):
+        for exported in (
+            self.db.export_csv(), self.db.export_agent_sessions_csv(),
+            self.db.export_runtime_events_csv(),
+        ):
             self.assertEqual(len(list(csv.DictReader(io.StringIO(exported)))), 501)
+
+    def test_exports_include_complete_allowlisted_evidence(self):
+        evidence = asset()
+        evidence.update({
+            "path_hash": "a" * 64,
+            "command_hash": "b" * 64,
+            "binary_sha256": "c" * 64,
+            "binary_fingerprint_status": "unlisted",
+            "fingerprint_library_version": "2026-09-20",
+            "metadata": {
+                "discovery_source": "Process snapshot", "executable": "ollama",
+                "package": "ollama-package", "configured_in": "settings.json",
+                "transport": "stdio", "host_app": "Cursor", "runtime": "python",
+                "relationship": "spawned_by", "instance_count": 2,
+                "demo_lab": True, "evidence_label": "SIMULATED TEST WORKLOADS",
+                "observed_running": True,
+            },
+        })
+        self.db.ingest(self.device, report("complete", [evidence]))
+        event = normalize_hook_event("sdk", "postToolUse", {
+            "session_id": "session", "agent_id": "agent", "workspace": "/private/project",
+            "user_id": "person", "tool_name": "MCP:search/query", "model": "model",
+            "source": "test-sdk", "duration_ms": 42,
+        })
+        self.db.ingest_runtime_events(self.device, [event])
+
+        assets = csv.DictReader(io.StringIO(self.db.export_csv()))
+        self.assertEqual(assets.fieldnames, [
+            "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "fingerprint", "kind", "name", "vendor", "version", "discovery_source",
+            "executable", "package", "configured_in", "transport", "host_app", "runtime",
+            "relationship", "instance_count", "demo_lab", "evidence_label", "observed_running",
+            "path_hash", "command_hash", "binary_sha256", "binary_fingerprint_status",
+            "fingerprint_library_version", "status", "running", "first_seen", "last_seen", "stale",
+        ])
+        asset_row = next(assets)
+        self.assertEqual(asset_row["fingerprint"], evidence["fingerprint"])
+        self.assertEqual(asset_row["path_hash"], "a" * 64)
+        self.assertEqual(asset_row["discovery_source"], "Process snapshot")
+        self.assertEqual(asset_row["instance_count"], "2")
+        self.assertEqual(asset_row["status"], "Running")
+
+        sessions = csv.DictReader(io.StringIO(self.db.export_agent_sessions_csv()))
+        self.assertEqual(sessions.fieldnames, [
+            "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "session_hash", "agent_hash", "app", "agent_type", "model", "status",
+            "workspace_hash", "user_hash", "first_seen", "last_seen", "last_event",
+            "event_count", "tool_count", "mcp_count", "duration_ms",
+        ])
+        session_row = next(sessions)
+        for key in ("session_hash", "agent_hash", "workspace_hash", "user_hash"):
+            self.assertEqual(session_row[key], event[key])
+
+        runtime_events = csv.DictReader(io.StringIO(self.db.export_runtime_events_csv()))
+        self.assertEqual(runtime_events.fieldnames, [
+            "event_id", "device_id", "hostname", "os", "os_version", "machine", "agent_version",
+            "observed_at", "received_at", "app", "event_type", "session_hash", "agent_hash",
+            "agent_type", "tool_name", "mcp_server", "model", "status", "duration_ms",
+            "workspace_hash", "user_hash", "source_event", "cursor_version", "permission_mode", "source",
+        ])
+        event_row = next(runtime_events)
+        self.assertEqual(event_row["event_id"], event["event_id"])
+        self.assertEqual(event_row["mcp_server"], "search")
+        self.assertEqual(event_row["source"], "test-sdk")
+
+    def test_csv_exports_neutralize_spreadsheet_formulas(self):
+        self.db.ingest(self.device, report("formula", [asset()]))
+        event = normalize_hook_event("sdk", "sessionStart", {"session_id": "formula", "model": "@MODEL"})
+        self.db.ingest_runtime_events(self.device, [event])
+        with self.db.connect() as conn:
+            conn.execute("UPDATE devices SET hostname='=HYPERLINK(\"https://example.invalid\")'")
+            conn.execute("UPDATE assets SET version='  +1+1'")
+        for exported in (
+            self.db.export_csv(), self.db.export_agent_sessions_csv(),
+            self.db.export_runtime_events_csv(),
+        ):
+            row = next(csv.DictReader(io.StringIO(exported)))
+            self.assertTrue(row["hostname"].startswith("'="))
+        asset_row = next(csv.DictReader(io.StringIO(self.db.export_csv())))
+        event_row = next(csv.DictReader(io.StringIO(self.db.export_runtime_events_csv())))
+        self.assertEqual(asset_row["version"], "'  +1+1")
+        self.assertEqual(asset_row["discovery_source"], "Process snapshot")
+        self.assertEqual(event_row["model"], "'@MODEL")
 
     def test_stale_inventory_is_not_running_even_with_runtime_upload(self):
         self.db.ingest(self.device, report("scan", [asset()]))

@@ -30,13 +30,13 @@ The MVP uses SQLite in WAL mode. It stores device records, immutable scan header
 
 ### Dashboard and export
 
-Administrators authenticate with a separate credential. The dashboard shows fleet totals and asset evidence. CSV export provides a portable snapshot for audit or SIEM ingestion.
+Administrators authenticate with a separate credential. The dashboard shows fleet totals and asset evidence. Separate asset, aggregated-session, and runtime-event CSV exports provide portable evidence for audit or SIEM ingestion. Their fixed schemas flatten only allowlisted metadata, retain pseudonymous hashes needed for correlation, neutralize spreadsheet formula prefixes, and exclude raw paths, identities, command lines, prompts, responses, and arbitrary metadata.
 
 Local macOS setup opens a fresh, single-use browser bootstrap URL to establish an administrator session; the administrator token is never placed in that URL. Opening the plain dashboard later without a valid session still requires sign-in.
 
 Runtime spool uploads are serialized independently of hook writers. Files are sent in bounded batches and retained until all batches succeed. Failed uploads replay the same event IDs, which the server deduplicates. Inventory snapshots and session state use observation timestamps rather than arrival order; older snapshots retain their scan headers without replacing current state.
 
-Running inventory requires a current snapshot received within 15 minutes. Runtime hook uploads alone do not refresh that inventory. The dashboard marks expired inventory as stale, and the asset CSV exposes a separate `stale` column. Both CSV exports include all records, independently of the dashboard's 500-row display cap. OTLP projection includes stopped assets after snapshot reconciliation.
+Running inventory requires a current snapshot received within 15 minutes. Runtime hook uploads alone do not refresh that inventory. The dashboard marks expired inventory as stale, and the asset CSV exposes a separate `stale` column. All three CSV exports include all records, independently of the dashboard's 500-row display cap. OTLP projection includes stopped assets after snapshot reconciliation.
 
 Inventory timestamps more than five minutes ahead of server time are rejected. Previously accepted future-dated scan headers outside that tolerance do not block current reconciliation or establish freshness. A failed process query suppresses the complete report rather than implying every process stopped.
 

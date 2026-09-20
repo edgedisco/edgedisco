@@ -70,6 +70,17 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _csv(self, filename: str, content: str) -> None:
+        body = content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f"attachment; filename={filename}")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _body(self, limit: int = 2_000_000) -> bytes:
         length = int(self.headers.get("Content-Length", "0"))
         if length < 0 or length > limit:
@@ -122,23 +133,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/export.csv":
             if not self._admin():
                 return self._json(401, {"error": "unauthorized"})
-            body = self.server.database.export_csv().encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", "attachment; filename=ai-asset-inventory.csv")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._csv("ai-asset-inventory.csv", self.server.database.export_csv())
         elif path == "/api/v1/agent-sessions.csv":
             if not self._admin():
                 return self._json(401, {"error": "unauthorized"})
-            body = self.server.database.export_agent_sessions_csv().encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", "attachment; filename=edgedisco-agent-sessions.csv")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._csv("edgedisco-agent-sessions.csv", self.server.database.export_agent_sessions_csv())
+        elif path == "/api/v1/runtime-events.csv":
+            if not self._admin():
+                return self._json(401, {"error": "unauthorized"})
+            self._csv("edgedisco-runtime-events.csv", self.server.database.export_runtime_events_csv())
         elif path == "/":
             body = files("ai_asset_inventory").joinpath("dashboard.html").read_bytes()
             self.send_response(200)

@@ -4,6 +4,7 @@ All notable project changes are documented here.
 
 ## 0.5.0
 
+- Expanded the privacy-safe asset and session CSV schemas, added an individual runtime-event export, and hardened spreadsheet downloads against formula injection.
 - Added an optional read-only MCP server using the official MCP Python SDK.
 - Added MCP tools for compliance counts, devices, AI assets, running agents, agent sessions, and discovered MCP servers.
 - Added bounded query results and metadata-only response schemas.
