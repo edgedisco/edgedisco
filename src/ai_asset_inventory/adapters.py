@@ -56,8 +56,26 @@ def _write(path: Path, data: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _same_managed_hook(existing: str, replacement: str) -> bool:
+    def identity(command):
+        if not isinstance(command, str):
+            return None
+        try:
+            parts = shlex.split(command, posix=os.name != "nt")
+            module = parts.index("-m")
+            if parts[module + 1:module + 4] != ["ai_asset_inventory", "hook", "emit"]:
+                return None
+            return (parts[parts.index("--app") + 1], parts[parts.index("--event") + 1])
+        except (ValueError, IndexError, TypeError):
+            return None
+    key = identity(existing)
+    return key is not None and key == identity(replacement)
+
+
 def _append_unique(items: list[dict[str, Any]], definition: dict[str, Any]) -> None:
     command = definition.get("command") or definition.get("bash")
+    items[:] = [item for item in items if not isinstance(item, dict) or
+                not _same_managed_hook(item.get("command") or item.get("bash"), command)]
     if not any((item.get("command") or item.get("bash")) == command for item in items if isinstance(item, dict)):
         items.append(definition)
 
@@ -81,6 +99,11 @@ def install_claude(config_path: Path, target: Path | None = None) -> Path:
     for event in CLAUDE_EVENTS:
         groups = hooks.setdefault(event, [])
         command = _command(config_path, "claude-code", event, "silent")
+        for group in groups:
+            if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+                group["hooks"][:] = [hook for hook in group["hooks"] if not isinstance(hook, dict)
+                                     or not _same_managed_hook(hook.get("command"), command)]
+        groups[:] = [group for group in groups if not isinstance(group, dict) or group.get("hooks") != []]
         if not any(command == hook.get("command") for group in groups if isinstance(group, dict)
                    for hook in group.get("hooks", []) if isinstance(hook, dict)):
             groups.append({"matcher": "", "hooks": [{"type": "command", "command": command, "timeout": 5}]})
@@ -97,8 +120,7 @@ def install_copilot(config_path: Path, target: Path | None = None) -> Path:
         entries = hooks.setdefault(event, [])
         command = _command(config_path, "github-copilot", event, "silent")
         definition = {"type": "command", "bash": command, "powershell": command, "timeoutSec": 5}
-        if not any(isinstance(item, dict) and item.get("bash") == command for item in entries):
-            entries.append(definition)
+        _append_unique(entries, definition)
     _write(target, data)
     return target
 

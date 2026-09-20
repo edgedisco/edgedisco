@@ -15,7 +15,7 @@ from typing import Any
 
 from . import __version__
 from .detector import collect_inventory, digest
-from .runtime import claim_spool, read_events, spool_path
+from .runtime import MAX_BATCH_EVENTS, _file_lock, claim_spool, read_events, spool_path
 
 
 def _utc_now() -> str:
@@ -30,6 +30,12 @@ def device_metadata() -> dict[str, str]:
         "machine": platform.machine(),
         "agent_version": __version__,
     }
+
+
+class UploadError(RuntimeError):
+    def __init__(self, status: int):
+        self.status = status
+        super().__init__(f"server returned HTTP {status}")
 
 
 class AgentClient:
@@ -52,8 +58,9 @@ class AgentClient:
             with urllib.request.urlopen(request, timeout=30, context=context) as response:
                 return json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:500]
-            raise RuntimeError(f"server returned HTTP {exc.code}: {detail}") from exc
+            status = exc.code
+            exc.close()
+            raise UploadError(status) from exc
 
     def enroll(self) -> None:
         token = self.config.get("enrollment_token")
@@ -117,20 +124,39 @@ class AgentClient:
 
     def flush_runtime_events(self) -> int:
         path = spool_path(self.config_path, self.config)
+        # Serialize consumers without holding the hook writers' lock over HTTP.
+        with _file_lock(path.with_suffix(path.suffix + ".upload")):
+            return self._flush_runtime_events(path)
+
+    def _flush_runtime_events(self, path: Path) -> int:
         pending = claim_spool(path)
         if pending is None:
             return 0
-        events = read_events(pending)
+        events = read_events(pending, limit=None)
         if not events:
             pending.unlink(missing_ok=True)
             return 0
+        batch = []
+        batch_bytes = 0
+        for event in events:
+            size = len(json.dumps(event).encode()) + 2
+            if batch and (len(batch) == MAX_BATCH_EVENTS or batch_bytes + size > 1_800_000):
+                self._send_runtime_batch(batch)
+                batch, batch_bytes = [], 0
+            batch.append(event)
+            batch_bytes += size
+        if batch:
+            self._send_runtime_batch(batch)
+        # On failure retain the whole file; event IDs make replay idempotent.
+        pending.unlink(missing_ok=True)
+        return len(events)
+
+    def _send_runtime_batch(self, events: list[dict[str, Any]]) -> None:
         self._request(
             "/api/v1/runtime-events",
             {"schema_version": 1, "events": events},
             self.config["device_token"],
         )
-        pending.unlink(missing_ok=True)
-        return len(events)
 
     def run(self) -> None:
         interval = max(60, int(self.config.get("scan_interval_seconds", 300)))

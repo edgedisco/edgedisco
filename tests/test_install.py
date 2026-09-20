@@ -186,18 +186,6 @@ class InstallerTests(unittest.TestCase):
                     urllib.request.urlopen(old_probe)
                 self.assertEqual(old_error.exception.code, 404)
 
-                broken_script = SCRIPT.replace('SETUP_ARGS=(--root "$INSTALL_ROOT")', 'SETUP_ARGS=()')
-                self.assertNotEqual(broken_script, SCRIPT)
-                nounset = subprocess.run(
-                    ["/bin/bash", "-c", broken_script], env=env, input="y\n",
-                    capture_output=True, text=True, timeout=180,
-                )
-                self.assertNotEqual(nounset.returncode, 0)
-                self.assertIn("SETUP_ARGS[@]: unbound variable", nounset.stderr)
-                self.assertNotIn("EdgeDisco installation verified.", nounset.stdout)
-                self.assertIn("Bootstrapping pip", nounset.stdout)
-                self.assertFalse((root / "cli-launcher.path").exists())
-
                 stale = subprocess.run(
                     ["/bin/bash", "-c", SCRIPT, "--", "--yes", "--no-open"],
                     env=env, capture_output=True, text=True, timeout=180,
@@ -324,6 +312,32 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual({row["name"] for row in upgraded_summary["items"]
                                   if row["metadata"].get("demo_lab")},
                                  {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server"})
+
+                # Fail after replacing the package, and verify real rollback
+                # restores the prior runnable venv, credentials, and database.
+                config_before_failure = (root / "agent.json").read_bytes()
+                broken_script = SCRIPT.replace('SETUP_ARGS=(--root "$INSTALL_ROOT")', 'SETUP_ARGS=()')
+                self.assertNotEqual(broken_script, SCRIPT)
+                nounset = subprocess.run(
+                    ["/bin/bash", "-c", broken_script], env=env, input="y\n",
+                    capture_output=True, text=True, timeout=180,
+                )
+                self.assertNotEqual(nounset.returncode, 0)
+                self.assertIn("SETUP_ARGS[@]: unbound variable", nounset.stderr)
+                self.assertIn("Previous installation restored", nounset.stderr)
+                self.assertEqual((root / "agent.json").read_bytes(), config_before_failure)
+                self.assertIn("demo", subprocess.check_output([str(managed), "--help"], env=env, text=True))
+                for _ in range(50):
+                    try:
+                        with urllib.request.urlopen(request, timeout=0.5) as response:
+                            restored = json.load(response)
+                        break
+                    except urllib.error.URLError:
+                        time.sleep(0.1)
+                else:
+                    self.fail("Rolled-back server did not become healthy")
+                self.assertEqual(restored["devices"], upgraded_summary["devices"])
+                self.assertEqual(restored["assets"], upgraded_summary["assets"])
 
                 removed = subprocess.run([str(managed), "uninstall", "--root", str(root)],
                                          env=env, capture_output=True, text=True, timeout=30)

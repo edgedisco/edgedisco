@@ -26,6 +26,12 @@ The MVP uses SQLite in WAL mode. It stores device records, immutable scan header
 
 Administrators authenticate with a separate credential. The dashboard shows fleet totals and asset evidence. CSV export provides a portable snapshot for audit or SIEM ingestion.
 
+Local macOS setup opens a fresh, single-use browser bootstrap URL to establish an administrator session; the administrator token is never placed in that URL. Opening the plain dashboard later without a valid session still requires sign-in.
+
+Runtime spool uploads are serialized independently of hook writers. Files are sent in bounded batches and retained until all batches succeed. Failed uploads replay the same event IDs, which the server deduplicates. Inventory snapshots and session state use observation timestamps rather than arrival order; older snapshots retain their scan headers without replacing current state.
+
+Running inventory requires a current snapshot received within 15 minutes. Runtime hook uploads alone do not refresh that inventory. The dashboard marks expired inventory as stale, and the asset CSV exposes a separate `stale` column. Both CSV exports include all records, independently of the dashboard's 500-row display cap. OTLP projection includes stopped assets after snapshot reconciliation.
+
 ## Data flow
 
 ```mermaid
@@ -64,6 +70,7 @@ sequenceDiagram
 
 - Endpoint reports are authenticated but remain untrusted input.
 - The API validates shape, field presence, types, and asset count.
+- Inventory ingestion rejects unknown fields, arbitrary metadata, invalid hashes, and timestamps without a timezone. Custom collectors must use the supported schema; stored evidence from earlier versions is not retroactively sanitized.
 - Runtime ingestion rejects fields outside its explicit metadata allowlist.
 - TLS termination is required outside localhost.
 - Administrator access is independent from endpoint upload access.

@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import plistlib
+import re
 import secrets
 import shlex
 import shutil
@@ -19,7 +20,8 @@ from typing import Any
 
 from . import __version__
 from .adapters import install_adapters
-from .agent import AgentClient
+from .agent import AgentClient, UploadError
+from .configuration import load_config, migrate_config
 
 
 SERVER_LABEL = "com.edgedisco.server"
@@ -376,7 +378,7 @@ def _wait_for_server(port: int, admin_token: str, timeout: int = 20) -> None:
     raise RuntimeError("server did not become healthy; inspect ~/.edgedisco/logs/server.err.log")
 
 
-def _verify_browser_bootstrap(port: int, admin_token: str) -> None:
+def _verify_browser_bootstrap(port: int, admin_token: str) -> str:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/api/v1/browser-bootstrap",
         data=b"", method="POST", headers={"Authorization": f"Bearer {admin_token}"},
@@ -391,8 +393,9 @@ def _verify_browser_bootstrap(port: int, admin_token: str) -> None:
         ) from None
     except (OSError, ValueError, KeyError):
         raise RuntimeError(f"Could not verify automatic dashboard sign-in on port {port}") from None
-    if not isinstance(path, str) or not path.startswith("/browser-bootstrap/"):
+    if not isinstance(path, str) or not re.fullmatch(r"/browser-bootstrap/[A-Za-z0-9_-]+", path):
         raise RuntimeError(f"Unexpected browser bootstrap response from port {port}")
+    return f"http://127.0.0.1:{port}{path}"
 
 
 def detect_adapters(home: Path | None = None) -> list[str]:
@@ -413,6 +416,7 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
     if platform.system() != "Darwin":
         raise RuntimeError("self-service setup currently supports macOS; use the manual deployment guide elsewhere")
     layout = default_layout(root, home)
+    current = load_config(layout.config)
     layout.database.parent.mkdir(parents=True, exist_ok=True)
     layout.logs.mkdir(parents=True, exist_ok=True)
     values = ensure_credentials(layout, port)
@@ -430,35 +434,40 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
     _wait_for_server(selected_port, values["AAI_ADMIN_TOKEN"])
     _verify_browser_bootstrap(selected_port, values["AAI_ADMIN_TOKEN"])
 
-    current = {}
-    if layout.config.exists():
-        try:
-            current = json.loads(layout.config.read_text())
-        except json.JSONDecodeError:
-            current = {}
+    current = migrate_config(current, server_url=f"http://127.0.0.1:{selected_port}",
+                             spool=layout.root / "runtime-events.jsonl")
     if not current.get("device_token"):
-        current = {
-            "server_url": f"http://127.0.0.1:{selected_port}",
-            "enrollment_token": values["AAI_ENROLLMENT_TOKEN"],
-            "scan_interval_seconds": 300,
-            "runtime_spool": str(layout.root / "runtime-events.jsonl"),
-        }
+        current.pop("device_id", None)
+        current["enrollment_token"] = values["AAI_ENROLLMENT_TOKEN"]
         _atomic_write(layout.config, json.dumps(current, indent=2) + "\n")
         AgentClient(layout.config).enroll()
     else:
-        current["server_url"] = f"http://127.0.0.1:{selected_port}"
-        current.setdefault("scan_interval_seconds", 300)
-        current.setdefault("runtime_spool", str(layout.root / "runtime-events.jsonl"))
+        current.pop("enrollment_token", None)
         _atomic_write(layout.config, json.dumps(current, indent=2) + "\n")
 
     apps = ["cursor", "claude-code", "github-copilot"] if all_adapters else detect_adapters()
     adapter_paths = install_adapters(layout.config, apps) if apps else []
-    report = AgentClient(layout.config).send_once()
+    try:
+        report = AgentClient(layout.config).send_once()
+    except UploadError as exc:
+        if exc.status != 401:
+            raise
+        # Only a definitive authentication rejection justifies a new identity.
+        # A timeout or server error must not create duplicate device records.
+        current = load_config(layout.config)
+        current.pop("device_id", None)
+        current.pop("device_token", None)
+        current["enrollment_token"] = values["AAI_ENROLLMENT_TOKEN"]
+        _atomic_write(layout.config, json.dumps(current, indent=2) + "\n")
+        client = AgentClient(layout.config)
+        client.enroll()
+        report = client.send_once()
     _restart_service(AGENT_LABEL, agent_plist)
     launcher = install_cli_launcher(layout, home)
     dashboard = f"http://127.0.0.1:{selected_port}"
     if open_dashboard:
-        webbrowser.open(dashboard)
+        # Mint immediately before opening: setup may outlive the 60-second code.
+        webbrowser.open(_verify_browser_bootstrap(selected_port, values["AAI_ADMIN_TOKEN"]))
     return {
         "version": __version__,
         "dashboard": dashboard,

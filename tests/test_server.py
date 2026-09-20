@@ -11,8 +11,10 @@ from pathlib import Path
 
 from ai_asset_inventory.database import Database
 from ai_asset_inventory.server import InventoryServer
-from ai_asset_inventory.agent import AgentClient
+from ai_asset_inventory.agent import AgentClient, UploadError
 from ai_asset_inventory.runtime import RuntimeClient
+from unittest.mock import patch
+from ai_asset_inventory.self_service import setup_macos
 
 
 class ServerTests(unittest.TestCase):
@@ -50,6 +52,55 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(self.base + "/api/v1/summary")
         self.assertEqual(caught.exception.code, 401)
+
+    def test_private_inventory_metadata_is_rejected_before_storage(self):
+        _, enrolled = self.post("/api/v1/enroll", "enroll", {"hostname": "test", "os": "Linux"})
+        payload = {"scan_id": "private", "observed_at": "2026-09-20T00:00:00+00:00",
+                   "device": {}, "privacy": {}, "assets": [
+                       {"fingerprint": "a" * 64, "kind": "process", "name": "Ollama",
+                        "vendor": "Ollama", "running": True, "metadata": {"prompt": "synthetic-private"}}
+                   ]}
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/v1/reports", enrolled["device_token"], payload)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(self.server.database.summary()["assets"], 0)
+        with self.server.database.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0], 0)
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._restart_service")
+    @patch("ai_asset_inventory.self_service._wait_for_server")
+    @patch("ai_asset_inventory.self_service.detect_adapters", return_value=[])
+    def test_setup_recovers_unknown_device_and_preserves_settings(self, detect, wait, restart, system):
+        home = Path(self.temp.name)
+        root = home / ".edgedisco"
+        root.mkdir()
+        (root / "server.env").write_text(f"export AAI_ADMIN_TOKEN=admin\nexport AAI_ENROLLMENT_TOKEN=enroll\nEDGEDISCO_PORT={self.server.server_port}\n")
+        config = root / "agent.json"
+        config.write_text(json.dumps({"device_id": "missing", "device_token": "expired",
+                                      "scan_interval_seconds": 900, "custom": "keep"}))
+        setup_macos(root=root, home=home, open_dashboard=False)
+        updated = json.loads(config.read_text())
+        self.assertNotEqual(updated["device_token"], "expired")
+        self.assertEqual(updated["custom"], "keep")
+        self.assertEqual(updated["scan_interval_seconds"], 900)
+        self.assertNotIn("enrollment_token", updated)
+        token = updated["device_token"]
+        setup_macos(root=root, home=home, open_dashboard=False)
+        self.assertEqual(json.loads(config.read_text())["device_token"], token)
+        self.assertEqual(self.server.database.summary()["devices"], 1)
+        with patch("ai_asset_inventory.self_service.AgentClient.send_once", side_effect=UploadError(503)), \
+             patch("ai_asset_inventory.self_service.AgentClient.enroll") as enroll:
+            with self.assertRaises(UploadError):
+                setup_macos(root=root, home=home, open_dashboard=False)
+            enroll.assert_not_called()
+        missing_token = json.loads(config.read_text())
+        missing_token.pop("device_token")
+        config.write_text(json.dumps(missing_token))
+        setup_macos(root=root, home=home, open_dashboard=False)
+        self.assertEqual(json.loads(config.read_text())["custom"], "keep")
+        self.assertEqual(json.loads(config.read_text())["scan_interval_seconds"], 900)
+        self.assertNotEqual(json.loads(config.read_text())["device_token"], token)
 
     def test_local_browser_bootstrap_is_single_use_and_keeps_admin_token_private(self):
         self.server.admin_token = "test-secret-admin-token-never-in-browser"

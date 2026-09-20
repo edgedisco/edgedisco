@@ -106,6 +106,20 @@ curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.
 bash install.sh
 ```
 
+Reinstall validates `agent.json` before replacing the package. Invalid JSON, invalid settings, or a configuration/database version newer than this release stops the upgrade. Repair the existing file or use a compatible release; reinstall does not silently discard it.
+
+Unversioned configuration is migrated to `config_version: 1`, preserving custom settings and adding missing defaults. The local server URL follows the configured port. Missing or rejected device credentials are re-enrolled with the local enrollment credential; timeouts and server errors do not trigger re-enrollment. Old EdgeDisco hook commands are replaced when paths change, while unrelated hooks remain intact.
+
+The installer prints a protected snapshot directory under `~/.edgedisco/backups/`. Each snapshot includes the previous managed environment, configuration, database, hook files, launch definitions, and shell profiles. Services are stopped before package replacement. If installation fails, the installer restores the snapshot and restarts the prior service definitions. Failed-attempt files and database evidence remain under the snapshot's `failed-state/`; runtime spool files are never rolled back. A failed stop prevents file replacement.
+
+Snapshots are retained and include credentials and evidence; keep them private. They consume space roughly proportional to the managed environment and database. If automatic recovery cannot finish, the installer reports the snapshot path. From a compatible source checkout, retry recovery with:
+
+```bash
+PYTHONPATH=src python3 -m ai_asset_inventory.upgrade restore --backup /absolute/path/to/.edgedisco/backups/TIMESTAMP
+```
+
+Database migrations and `PRAGMA user_version` commit in one transaction. This release migrates the original unversioned schema to version 1; future schema changes must supply explicit migration steps. These backup/rollback guarantees apply to `install.sh`; running `edgedisco setup` directly does not snapshot the package.
+
 ## Uninstall
 
 Stop and remove the background services while keeping the local data:

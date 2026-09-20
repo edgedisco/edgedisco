@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .detector import digest
+from .validation import timestamp
 
 MAX_HOOK_INPUT_BYTES = 1_000_000
 MAX_SPOOL_BYTES = 10_000_000
@@ -125,6 +126,8 @@ def normalize_hook_event(app: str, event_type: str, payload: dict[str, Any]) -> 
 
 
 def validate_normalized_event(event: dict[str, Any]) -> None:
+    if not isinstance(event, dict):
+        raise ValueError("runtime event must be an object")
     allowed = {
         "event_id", "observed_at", "app", "event_type", "session_hash", "agent_hash",
         "agent_type", "tool_name", "mcp_server", "model", "status", "duration_ms",
@@ -138,6 +141,7 @@ def validate_normalized_event(event: dict[str, Any]) -> None:
             raise ValueError(f"runtime event missing field: {field}")
     if event["app"] not in ALLOWED_APPS:
         raise ValueError("runtime event app is unsupported")
+    timestamp(event["observed_at"])
     limits = {
         "event_id": 64, "observed_at": 64, "event_type": 64, "agent_type": 128,
         "tool_name": 128, "mcp_server": 128, "model": 128, "status": 32,
@@ -228,11 +232,11 @@ def claim_spool(path: Path) -> Path | None:
         return pending
 
 
-def read_events(path: Path) -> list[dict[str, Any]]:
+def read_events(path: Path, limit: int | None = MAX_BATCH_EVENTS) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     events: list[dict[str, Any]] = []
-    for line in path.read_text(errors="replace").splitlines()[:MAX_BATCH_EVENTS]:
+    for line in path.read_text(errors="replace").splitlines()[:limit]:
         try:
             event = json.loads(line)
             validate_normalized_event(event)

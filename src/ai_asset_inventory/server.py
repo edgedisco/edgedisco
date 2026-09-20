@@ -18,6 +18,7 @@ from typing import Any
 
 from .database import Database
 from .runtime import validate_normalized_event
+from .validation import validate_device, validate_report
 
 
 class InventoryServer(ThreadingHTTPServer):
@@ -71,7 +72,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _body(self, limit: int = 2_000_000) -> bytes:
         length = int(self.headers.get("Content-Length", "0"))
-        if length > limit:
+        if length < 0 or length > limit:
             raise ValueError("request too large")
         return self.rfile.read(length)
 
@@ -177,6 +178,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not hmac.compare_digest(self._bearer(), self.server.enrollment_token):
                     return self._json(401, {"error": "invalid enrollment token"})
                 payload = json.loads(self._body())
+                validate_device(payload)
                 device_id, token = self.server.database.enroll(payload)
                 return self._json(201, {"device_id": device_id, "device_token": token})
             if path == "/api/v1/reports":
@@ -192,6 +194,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not device:
                     return self._json(401, {"error": "invalid device token"})
                 payload = json.loads(self._body())
+                if not isinstance(payload, dict) or set(payload) - {"schema_version", "events"}:
+                    raise ValueError("invalid runtime event batch")
                 events = payload.get("events")
                 if not isinstance(events, list) or len(events) > 1000:
                     raise ValueError("events must be a list with at most 1000 entries")
@@ -207,19 +211,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _validate_report(payload: dict[str, Any]) -> None:
-        for field in ("scan_id", "observed_at", "device", "assets", "privacy"):
-            if field not in payload:
-                raise ValueError(f"missing field: {field}")
-        if not isinstance(payload["assets"], list) or len(payload["assets"]) > 10_000:
-            raise ValueError("assets must be a list with at most 10000 entries")
-        for index, asset in enumerate(payload["assets"]):
-            if not isinstance(asset, dict):
-                raise ValueError(f"asset {index} must be an object")
-            for field in ("fingerprint", "kind", "name", "vendor", "running"):
-                if field not in asset:
-                    raise ValueError(f"asset {index} missing field: {field}")
-            if not isinstance(asset["running"], bool):
-                raise ValueError(f"asset {index} running must be boolean")
+        validate_report(payload)
 
 
 def serve(host: str, port: int, db_path: Path) -> None:

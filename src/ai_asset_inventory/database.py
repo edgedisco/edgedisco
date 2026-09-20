@@ -12,10 +12,26 @@ from pathlib import Path
 from typing import Any
 
 from .otlp_events import project_asset
+from .validation import timestamp
 
 OTLP_MAX_PENDING = 5_000
 OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 OTLP_MAX_AGE_DAYS = 7
+DATABASE_VERSION = 1
+
+# Runtime uploads do not establish process-inventory freshness.
+FRESH_SCAN = """EXISTS (SELECT 1 FROM scans fresh WHERE fresh.device_id=a.device_id
+    AND julianday(fresh.received_at)>=julianday('now','-15 minutes')
+    AND NOT EXISTS (SELECT 1 FROM scans newer WHERE newer.device_id=a.device_id
+        AND newer.observed_at>fresh.observed_at))"""
+
+
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
 
 
 def utc_now() -> str:
@@ -40,7 +56,7 @@ class Database:
         self.initialize()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=20)
+        conn = sqlite3.connect(self.path, timeout=20, factory=ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
@@ -48,7 +64,11 @@ class Database:
 
     def initialize(self) -> None:
         with self.connect() as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version > DATABASE_VERSION:
+                raise RuntimeError("Database was created by a newer EdgeDisco release; refusing downgrade")
             conn.executescript("""
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS devices (
                     id TEXT PRIMARY KEY, hostname TEXT NOT NULL, os TEXT NOT NULL,
                     os_version TEXT, machine TEXT, agent_version TEXT,
@@ -68,6 +88,8 @@ class Database:
                     PRIMARY KEY(device_id, fingerprint)
                 );
                 CREATE INDEX IF NOT EXISTS idx_assets_name ON assets(name);
+                CREATE INDEX IF NOT EXISTS idx_scans_device_received ON scans(device_id,received_at);
+                CREATE INDEX IF NOT EXISTS idx_scans_device_observed ON scans(device_id,observed_at);
                 CREATE INDEX IF NOT EXISTS idx_assets_seen ON assets(last_seen);
                 CREATE TABLE IF NOT EXISTS runtime_events (
                     id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES devices(id),
@@ -113,6 +135,9 @@ class Database:
                 );
                 INSERT OR IGNORE INTO otlp_export_status(id) VALUES(1);
             """)
+            # Version 0 is the original unversioned schema. DDL and the version
+            # marker commit together; failed migrations roll back together.
+            conn.execute(f"PRAGMA user_version={DATABASE_VERSION}")
 
     def enroll(self, metadata: dict[str, Any]) -> tuple[str, str]:
         device_id = secrets.token_hex(16)
@@ -133,20 +158,29 @@ class Database:
             return conn.execute("SELECT * FROM devices WHERE token_hash=?", (token_hash(token),)).fetchone()
 
     def ingest(self, device_id: str, report: dict[str, Any]) -> int:
-        observed_at = str(report["observed_at"])
+        observed_at = timestamp(report["observed_at"])
         received_at = utc_now()
         scan_id = str(report["scan_id"])
         assets = report.get("assets", [])
         with self.connect() as conn:
-            existing = conn.execute("SELECT asset_count FROM scans WHERE id=?", (scan_id,)).fetchone()
+            # Hold the writer reservation while deciding whether this snapshot
+            # is newer, so concurrent uploads cannot both supersede each other.
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT device_id,asset_count FROM scans WHERE id=?", (scan_id,)).fetchone()
             if existing:
+                if existing["device_id"] != device_id:
+                    raise ValueError("scan ID already belongs to another device")
                 return int(existing["asset_count"])
+            newer = conn.execute("SELECT 1 FROM scans WHERE device_id=? AND observed_at>? LIMIT 1",
+                                 (device_id, observed_at)).fetchone()
             conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (received_at, device_id))
             conn.execute(
                 "INSERT INTO scans VALUES (?, ?, ?, ?, ?, ?)",
                 (scan_id, device_id, observed_at, received_at, len(assets),
                  json.dumps(report.get("privacy", {}), sort_keys=True)),
             )
+            if newer:
+                return len(assets)
             conn.execute("UPDATE assets SET running=0 WHERE device_id=?", (device_id,))
             for item in assets:
                 conn.execute("""
@@ -167,7 +201,13 @@ class Database:
             if self.otlp_enabled:
                 conn.execute("SAVEPOINT otlp_projection")
                 try:
-                    self._queue_otlp_observations(conn, device_id, observed_at, assets)
+                    reconciled = []
+                    for row in conn.execute("SELECT * FROM assets WHERE device_id=?", (device_id,)):
+                        item = dict(row)
+                        item["running"] = bool(item["running"])
+                        item["metadata"] = json.loads(item.pop("metadata_json"))
+                        reconciled.append(item)
+                    self._queue_otlp_observations(conn, device_id, observed_at, reconciled)
                     conn.execute("RELEASE SAVEPOINT otlp_projection")
                 except (sqlite3.Error, TypeError, ValueError):
                     # Export bookkeeping must not roll back local inventory.
@@ -192,10 +232,16 @@ class Database:
         for row in expired:
             self._drop_outbox_row(conn, row, now, "age")
 
+        projections = {}
         for asset in assets:
             projected = project_asset(device_id, observed_at, asset)
             if projected is None:
                 continue
+            key, _, event = projected
+            # Multiple raw fingerprints can describe one exported logical asset.
+            if key not in projections or event["attributes"]["asset.running"]:
+                projections[key] = projected
+        for projected in projections.values():
             asset_key, state_hash, event = projected
             prior = conn.execute("SELECT state_hash FROM otlp_asset_state WHERE asset_key=?", (asset_key,)).fetchone()
             if prior and prior["state_hash"] == state_hash:
@@ -255,16 +301,17 @@ class Database:
         with self.connect() as conn:
             devices = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
             assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
-            running = conn.execute("SELECT COUNT(*) FROM assets WHERE running=1").fetchone()[0]
+            running = conn.execute(f"SELECT COUNT(*) FROM assets a WHERE running=1 AND {FRESH_SCAN}").fetchone()[0]
             mcp = conn.execute("SELECT COUNT(*) FROM assets WHERE kind='mcp_server'").fetchone()[0]
-            agents = conn.execute("SELECT COUNT(*) FROM assets WHERE kind='agent_runtime' AND running=1").fetchone()[0]
+            agents = conn.execute(f"SELECT COUNT(*) FROM assets a WHERE kind='agent_runtime' AND running=1 AND {FRESH_SCAN}").fetchone()[0]
             active_sessions = conn.execute(
                 "SELECT COUNT(*) FROM agent_sessions WHERE status='active' AND last_seen>=?",
                 (active_cutoff,),
             ).fetchone()[0]
             session_count = conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0]
-            recent = [dict(row) for row in conn.execute("""
-                SELECT a.name,a.vendor,a.kind,a.running,a.first_seen,a.last_seen,
+            recent = [dict(row) for row in conn.execute(f"""
+                SELECT a.name,a.vendor,a.kind,(a.running AND {FRESH_SCAN}) AS running,
+                       (NOT {FRESH_SCAN}) AS stale,a.first_seen,a.last_seen,
                        d.hostname,d.os,d.id AS device_id,a.metadata_json
                 FROM assets a JOIN devices d ON d.id=a.device_id
                 ORDER BY a.last_seen DESC LIMIT 500
@@ -288,6 +335,7 @@ class Database:
         for row in recent:
             row["metadata"] = json.loads(row.pop("metadata_json"))
             row["running"] = bool(row["running"])
+            row["stale"] = bool(row["stale"])
         for row in event_items:
             row["metadata"] = json.loads(row.pop("metadata_json"))
         return {
@@ -328,19 +376,20 @@ class Database:
             clauses.append("a.kind=?")
             parameters.append(str(kind)[:64])
         if running_only:
-            clauses.append("a.running=1")
+            clauses.append(f"a.running=1 AND {FRESH_SCAN}")
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         parameters.append(self._result_limit(limit))
         with self.connect() as conn:
             rows = conn.execute(f"""
                 SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
-                       a.running,a.first_seen,a.last_seen
+                       (a.running AND {FRESH_SCAN}) AS running,(NOT {FRESH_SCAN}) AS stale,a.first_seen,a.last_seen
                 FROM assets a JOIN devices d ON d.id=a.device_id
                 {where} ORDER BY a.last_seen DESC LIMIT ?
             """, parameters)
             result = [dict(row) for row in rows]
         for row in result:
             row["running"] = bool(row["running"])
+            row["stale"] = bool(row["stale"])
         return result
 
     def list_agent_sessions(self, *, status: str | None = None,
@@ -382,6 +431,7 @@ class Database:
         with self.connect() as conn:
             conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (received_at, device_id))
             for event in events:
+                event = dict(event, observed_at=timestamp(event["observed_at"]))
                 cursor = conn.execute("""
                     INSERT OR IGNORE INTO runtime_events(
                       id,device_id,observed_at,received_at,app,event_type,session_hash,
@@ -406,14 +456,16 @@ class Database:
                       event_count,tool_count,mcp_count,duration_ms)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(device_id,session_hash,agent_hash) DO UPDATE SET
-                      app=excluded.app,
-                      agent_type=COALESCE(excluded.agent_type,agent_sessions.agent_type),
-                      model=COALESCE(excluded.model,agent_sessions.model),
-                      status=excluded.status,
-                      workspace_hash=COALESCE(excluded.workspace_hash,agent_sessions.workspace_hash),
-                      user_hash=COALESCE(excluded.user_hash,agent_sessions.user_hash),
-                      last_seen=excluded.last_seen,last_event=excluded.last_event,
-                      duration_ms=COALESCE(excluded.duration_ms,agent_sessions.duration_ms),
+                      app=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN excluded.app ELSE agent_sessions.app END,
+                      agent_type=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN COALESCE(excluded.agent_type,agent_sessions.agent_type) ELSE COALESCE(agent_sessions.agent_type,excluded.agent_type) END,
+                      model=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN COALESCE(excluded.model,agent_sessions.model) ELSE agent_sessions.model END,
+                      status=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN excluded.status ELSE agent_sessions.status END,
+                      workspace_hash=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN COALESCE(excluded.workspace_hash,agent_sessions.workspace_hash) ELSE COALESCE(agent_sessions.workspace_hash,excluded.workspace_hash) END,
+                      user_hash=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN COALESCE(excluded.user_hash,agent_sessions.user_hash) ELSE COALESCE(agent_sessions.user_hash,excluded.user_hash) END,
+                      first_seen=MIN(agent_sessions.first_seen,excluded.first_seen),
+                      last_seen=MAX(agent_sessions.last_seen,excluded.last_seen),
+                      last_event=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN excluded.last_event ELSE agent_sessions.last_event END,
+                      duration_ms=CASE WHEN excluded.last_seen>=agent_sessions.last_seen THEN COALESCE(excluded.duration_ms,agent_sessions.duration_ms) ELSE agent_sessions.duration_ms END,
                       event_count=agent_sessions.event_count+1,
                       tool_count=agent_sessions.tool_count+excluded.tool_count,
                       mcp_count=agent_sessions.mcp_count+excluded.mcp_count
@@ -428,17 +480,21 @@ class Database:
         return accepted
 
     def export_csv(self) -> str:
-        data = self.summary()["items"]
         output = io.StringIO()
-        fields = ["device_id", "hostname", "os", "kind", "name", "vendor", "running", "first_seen", "last_seen"]
+        fields = ["device_id", "hostname", "os", "kind", "name", "vendor", "running", "first_seen", "last_seen", "stale"]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
-        for item in data:
-            writer.writerow({key: item.get(key) for key in fields})
+        with self.connect() as conn:
+            for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,
+                (a.running AND {FRESH_SCAN}) AS running,a.first_seen,a.last_seen,(NOT {FRESH_SCAN}) AS stale
+                FROM assets a JOIN devices d ON d.id=a.device_id ORDER BY a.last_seen DESC"""):
+                item = dict(row)
+                item["running"] = bool(item["running"])
+                item["stale"] = bool(item["stale"])
+                writer.writerow(item)
         return output.getvalue()
 
     def export_agent_sessions_csv(self) -> str:
-        data = self.summary()["session_items"]
         output = io.StringIO()
         fields = [
             "device_id", "hostname", "os", "app", "agent_type", "model", "status",
@@ -447,6 +503,11 @@ class Database:
         ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
-        for item in data:
-            writer.writerow({key: item.get(key) for key in fields})
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        with self.connect() as conn:
+            for row in conn.execute("""SELECT s.device_id,d.hostname,d.os,s.app,s.agent_type,s.model,
+                CASE WHEN s.status='active' AND s.last_seen<? THEN 'stale' ELSE s.status END AS status,
+                s.first_seen,s.last_seen,s.last_event,s.event_count,s.tool_count,s.mcp_count,s.duration_ms
+                FROM agent_sessions s JOIN devices d ON d.id=s.device_id ORDER BY s.last_seen DESC""", (cutoff,)):
+                writer.writerow(dict(row))
         return output.getvalue()

@@ -8,10 +8,21 @@ ASSUME_YES=false
 SETUP_ARGS=(--root "$INSTALL_ROOT")
 TEMP_DIR=""
 INSTALL_COMPLETE=false
+UPGRADE_BACKUP=""
+UPGRADE_STARTED=false
 
 cleanup() {
   local status=$?
   trap - EXIT
+  if [[ "$INSTALL_COMPLETE" != true && "$UPGRADE_STARTED" == true ]]; then
+    echo "Restoring the previous EdgeDisco installation..." >&2
+    if PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade restore --backup "$UPGRADE_BACKUP"; then
+      echo "Previous installation restored. Backup and failed-attempt evidence: $UPGRADE_BACKUP" >&2
+    else
+      echo "Automatic rollback could not finish. Recovery backup: $UPGRADE_BACKUP" >&2
+    fi
+    status=1
+  fi
   if [[ -n "$TEMP_DIR" ]]; then
     /bin/rm -rf "$TEMP_DIR" || status=1
   fi
@@ -108,6 +119,11 @@ if [[ -z "$PACKAGE_SOURCE" ]]; then
 fi
 
 /bin/mkdir -p "$INSTALL_ROOT"
+# Run recovery code from the source tree, independently of the managed venv.
+UPGRADE_BACKUP="$(PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade snapshot --root "$INSTALL_ROOT")"
+echo "Installation backup: $UPGRADE_BACKUP"
+UPGRADE_STARTED=true
+PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade stop --root "$INSTALL_ROOT"
 VENV_PYTHON="$INSTALL_ROOT/venv/bin/python"
 if [[ ! -x "$VENV_PYTHON" ]]; then
   "$BASE_PYTHON" -m venv --without-pip "$INSTALL_ROOT/venv"

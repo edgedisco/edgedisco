@@ -79,7 +79,8 @@ class SelfServiceTests(unittest.TestCase):
             def read(self): return b'{"bootstrap_path":"/browser-bootstrap/test-code"}'
         urlopen.return_value = Response()
         for port in (8080, 8090, 49152):
-            _verify_browser_bootstrap(port, "test-admin-token")
+            self.assertEqual(_verify_browser_bootstrap(port, "test-admin-token"),
+                             f"http://127.0.0.1:{port}/browser-bootstrap/test-code")
             self.assertEqual(
                 urlopen.call_args.args[0].full_url,
                 f"http://127.0.0.1:{port}/api/v1/browser-bootstrap",
@@ -144,9 +145,13 @@ class SelfServiceTests(unittest.TestCase):
         self, _detect, _install, _verify, _wait, restart, _health, _system
     ):
         with tempfile.TemporaryDirectory() as temp:
-            result = setup_macos(
-                root=Path(temp) / ".edgedisco", home=Path(temp), open_dashboard=False
-            )
+            _verify.return_value = "http://127.0.0.1:8080/browser-bootstrap/fresh-code"
+            with patch("ai_asset_inventory.self_service.webbrowser.open") as browser:
+                result = setup_macos(
+                    root=Path(temp) / ".edgedisco", home=Path(temp), open_dashboard=True
+                )
+                browser.assert_called_once_with(_verify.return_value)
+                self.assertEqual(_verify.call_count, 2)
             self.assertEqual(result["asset_count"], 4)
             self.assertEqual(result["adapters"], ["cursor"])
             self.assertEqual(restart.call_count, 2)
