@@ -192,7 +192,9 @@ cat > agent.json <<EOF
 {
   "server_url": "http://127.0.0.1:8080",
   "enrollment_token": "$AAI_ENROLLMENT_TOKEN",
-  "scan_interval_seconds": 300
+  "scan_interval_seconds": 300,
+  "process_poll_interval_seconds": 60,
+  "static_scan_interval_seconds": 900
 }
 EOF
 chmod 600 agent.json
@@ -224,6 +226,8 @@ For continuous inventory and runtime-event forwarding:
 ```bash
 ai-inventory agent run --config agent.json
 ```
+
+The long-running collector checks the lightweight current-user process snapshot every 60 seconds, uploads immediately when inventory changes, and sends a five-minute heartbeat when it does not. Installed applications, CLI entry points, binary hashes, and MCP configuration are cached for up to 15 minutes and refreshed sooner when bounded filesystem metadata changes. See [Scanning performance](docs/scanning-performance.md) for tuning and event-driven design options.
 
 After enrollment, the shared enrollment credential is removed from the configuration and replaced with a unique `device_id` and `device_token`.
 

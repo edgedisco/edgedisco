@@ -23,6 +23,16 @@ def load_config(path: Path) -> dict:
     interval = config.get("scan_interval_seconds", 300)
     if type(interval) is not int or interval < 60:
         raise RuntimeError(f"Invalid scan_interval_seconds in {path}; expected an integer of at least 60")
+    process_interval = config.get("process_poll_interval_seconds", 60)
+    if type(process_interval) is not int or process_interval < 10:
+        raise RuntimeError(
+            f"Invalid process_poll_interval_seconds in {path}; expected an integer of at least 10"
+        )
+    static_interval = config.get("static_scan_interval_seconds", 900)
+    if type(static_interval) is not int or static_interval < 60:
+        raise RuntimeError(
+            f"Invalid static_scan_interval_seconds in {path}; expected an integer of at least 60"
+        )
     return config
 
 
@@ -32,6 +42,8 @@ def migrate_config(config: dict, *, server_url: str, spool: Path) -> dict:
     # survive migrations; future field renames belong in explicit version steps.
     if migrated.get("config_version", 0) == 0:
         migrated.setdefault("scan_interval_seconds", 300)
+        migrated.setdefault("process_poll_interval_seconds", 60)
+        migrated.setdefault("static_scan_interval_seconds", 900)
         migrated.setdefault("runtime_spool", str(spool))
         migrated["config_version"] = 1
     migrated["server_url"] = server_url

@@ -29,7 +29,20 @@ class UpgradeTests(unittest.TestCase):
         for key, value in config.items():
             self.assertEqual(migrated[key], value)
         self.assertEqual(migrated["config_version"], 1)
+        self.assertEqual(migrated["process_poll_interval_seconds"], 60)
+        self.assertEqual(migrated["static_scan_interval_seconds"], 900)
         self.assertEqual(migrate_config(migrated, server_url=migrated["server_url"], spool=self.root / "other"), migrated)
+
+    def test_incremental_scan_intervals_are_validated(self):
+        path = self.root / "agent.json"
+        for field, value in (
+            ("process_poll_interval_seconds", 9),
+            ("static_scan_interval_seconds", 59),
+        ):
+            with self.subTest(field=field):
+                path.write_text(json.dumps({field: value}))
+                with self.assertRaisesRegex(RuntimeError, field):
+                    load_config(path)
 
     def test_changed_hook_paths_replace_managed_commands(self):
         for installer in (install_cursor, install_claude, install_copilot):

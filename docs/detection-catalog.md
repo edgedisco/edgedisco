@@ -45,6 +45,7 @@ Desktop and framework signatures also cover ChatGPT, Claude, Cursor, GitHub Copi
 - Generic Python, Node, `npx`, `uvx`, and Docker processes are classified only from their module, script, package, or image identity. Later arguments are not searched, preventing prompts or arbitrary command text from becoming detection signals.
 - Editor extension installation is not equivalent to an active agent session. Where an editor hides the agent behind its main process, a native adapter is needed for session-level evidence.
 - A point-in-time process scan can miss very short-lived commands. Continuous collection and native hooks improve coverage.
+- The long-running collector polls current-user processes independently from its cached static scan. Default detection latency is therefore up to 60 seconds for an uninstrumented process; native runtime hooks can report supported session activity sooner.
 - `running=true` means the process was observed in the latest fresh inventory snapshot. It does not assert that the agent was actively generating a response at that instant.
 
 ## Privacy treatment

@@ -15,6 +15,43 @@ HOMEBREW_FRAMEWORK_PYTHON = (
 
 
 class DetectorTests(unittest.TestCase):
+    def test_incremental_scanner_refreshes_processes_but_reuses_static_evidence(self):
+        static = detector.Asset(
+            fingerprint="a" * 64, kind="application", name="Claude", vendor="Anthropic",
+            running=False,
+        )
+        process = detector.Asset(
+            fingerprint="b" * 64, kind="process", name="Claude", vendor="Anthropic", running=True,
+        )
+        clock = unittest.mock.Mock(side_effect=[0.0, 10.0])
+        scanner = detector.InventoryScanner(static_refresh_seconds=900, clock=clock)
+        with patch.object(detector, "_static_revision", return_value=(("root", 1, 1, 1, 1),)), \
+             patch.object(detector, "scan_static_inventory", return_value=[static]) as scan_static, \
+             patch.object(detector, "scan_processes", return_value=[process]) as scan_processes:
+            first = scanner.collect_inventory()
+            second = scanner.collect_inventory()
+        self.assertEqual(first, second)
+        scan_static.assert_called_once_with()
+        self.assertEqual(scan_processes.call_count, 2)
+
+    def test_incremental_scanner_invalidates_on_metadata_change_or_ttl(self):
+        scanner = detector.InventoryScanner(
+            static_refresh_seconds=60,
+            clock=unittest.mock.Mock(side_effect=[0.0, 10.0, 71.0]),
+        )
+        revisions = (
+            (("root", 1, 1, 1, 1),),
+            (("root", 1, 2, 2, 2),),
+            (("root", 1, 2, 2, 2),),
+        )
+        with patch.object(detector, "_static_revision", side_effect=revisions), \
+             patch.object(detector, "scan_static_inventory", return_value=[]) as scan_static, \
+             patch.object(detector, "scan_processes", return_value=[]):
+            scanner.collect_inventory()
+            scanner.collect_inventory()
+            scanner.collect_inventory()
+        self.assertEqual(scan_static.call_count, 3)
+
     def test_process_inventory_asks_ps_for_current_unix_user_only(self):
         output = (
             "10 1 /usr/local/bin/codex codex\n"

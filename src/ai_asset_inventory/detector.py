@@ -8,6 +8,7 @@ import plistlib
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -151,7 +152,7 @@ def scan_processes() -> list[Asset]:
     for row in rows:
         executable, args = row.executable, row.args
         executable_name = Path(executable).name
-        classified = _classify_process(row)
+        classified = classifications.get(row.pid) if row.pid is not None else _classify_process(row)
         if not classified:
             continue
         name, vendor = classified
@@ -368,25 +369,31 @@ def _mac_bundle_version(app_path: Path) -> str | None:
         return None
 
 
-def _installed_candidates() -> Iterable[tuple[str, Path, str | None]]:
+def _application_roots() -> tuple[Path, ...]:
+    home = Path.home()
     system = platform.system()
     if system == "Darwin":
-        roots = [Path("/Applications"), Path.home() / "Applications"]
-        for root in roots:
-            if root.exists():
-                for path in root.glob("*.app"):
-                    yield path.stem, path, _mac_bundle_version(path)
-    elif system == "Windows":
+        return (Path("/Applications"), home / "Applications")
+    if system == "Windows":
         localappdata = os.environ.get("LOCALAPPDATA")
         roots = [
             os.environ.get("ProgramFiles"),
             os.environ.get("ProgramFiles(x86)"),
             str(Path(localappdata) / "Programs") if localappdata else None,
         ]
-        for raw_root in roots:
-            if not raw_root:
-                continue
-            root = Path(raw_root)
+        return tuple(Path(root) for root in roots if root)
+    return (Path("/usr/share/applications"), home / ".local/share/applications")
+
+
+def _installed_candidates() -> Iterable[tuple[str, Path, str | None]]:
+    system = platform.system()
+    if system == "Darwin":
+        for root in _application_roots():
+            if root.exists():
+                for path in root.glob("*.app"):
+                    yield path.stem, path, _mac_bundle_version(path)
+    elif system == "Windows":
+        for root in _application_roots():
             if root.exists():
                 try:
                     for path in root.iterdir():
@@ -394,8 +401,7 @@ def _installed_candidates() -> Iterable[tuple[str, Path, str | None]]:
                 except OSError:
                     continue
     else:
-        roots = [Path("/usr/share/applications"), Path.home() / ".local/share/applications"]
-        for root in roots:
+        for root in _application_roots():
             if root.exists():
                 for path in root.glob("*.desktop"):
                     try:
@@ -554,7 +560,7 @@ def scan_installed_clis() -> list[Asset]:
     return assets
 
 
-def _mcp_paths() -> Iterable[tuple[str, Path]]:
+def _mcp_candidates() -> tuple[tuple[str, Path], ...]:
     home = Path.home()
     system = platform.system()
     candidates = [
@@ -569,9 +575,11 @@ def _mcp_paths() -> Iterable[tuple[str, Path]]:
         appdata = Path(os.environ.get("APPDATA", str(home)))
         candidates.append(("Claude Desktop", appdata / "Claude/claude_desktop_config.json"))
         candidates.append(("VS Code", appdata / "Code/User/mcp.json"))
-    for owner, path in candidates:
-        if path.exists():
-            yield owner, path
+    return tuple(candidates)
+
+
+def _mcp_paths() -> Iterable[tuple[str, Path]]:
+    return ((owner, path) for owner, path in _mcp_candidates() if path.exists())
 
 
 def scan_mcp_configs() -> list[Asset]:
@@ -599,12 +607,62 @@ def scan_mcp_configs() -> list[Asset]:
     return assets
 
 
-def collect_inventory() -> list[Asset]:
+def _merge_inventory(assets: Iterable[Asset]) -> list[Asset]:
     merged: dict[str, Asset] = {}
-    for asset in [*scan_installed_apps(), *scan_installed_clis(), *scan_mcp_configs(), *scan_processes()]:
+    for asset in assets:
         current = merged.get(asset.fingerprint)
         if current and asset.running and not current.running:
             merged[asset.fingerprint] = asset
         elif current is None:
             merged[asset.fingerprint] = asset
     return sorted(merged.values(), key=lambda item: (item.kind, item.name.lower()))
+
+
+def scan_static_inventory() -> list[Asset]:
+    """Scan evidence that changes much less often than the process table."""
+    return _merge_inventory((*scan_installed_apps(), *scan_installed_clis(), *scan_mcp_configs()))
+
+
+def _static_watch_paths() -> tuple[Path, ...]:
+    """Return bounded paths whose metadata cheaply signals a likely static change."""
+    paths = [*_application_roots(), *_executable_roots()]
+    for _owner, path in _mcp_candidates():
+        paths.extend((path, path.parent))
+    return tuple(dict.fromkeys(paths))
+
+
+def _static_revision() -> tuple[tuple[str, int | None, int | None, int | None, int | None], ...]:
+    revision = []
+    for path in _static_watch_paths():
+        try:
+            state = path.stat()
+            revision.append((str(path), state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns))
+        except OSError:
+            revision.append((str(path), None, None, None, None))
+    return tuple(revision)
+
+
+class InventoryScanner:
+    """Refresh processes every call while incrementally caching static evidence."""
+
+    def __init__(self, static_refresh_seconds: int = 900, *, clock=None):
+        self.static_refresh_seconds = max(60, int(static_refresh_seconds))
+        self._clock = clock or time.monotonic
+        self._static_assets: tuple[Asset, ...] | None = None
+        self._cached_revision = None
+        self._last_static_scan = 0.0
+
+    def collect_inventory(self, *, force_static: bool = False) -> list[Asset]:
+        now = self._clock()
+        revision = _static_revision()
+        expired = now - self._last_static_scan >= self.static_refresh_seconds
+        if force_static or self._static_assets is None or revision != self._cached_revision or expired:
+            self._static_assets = tuple(scan_static_inventory())
+            self._cached_revision = revision
+            self._last_static_scan = now
+        return _merge_inventory((*self._static_assets, *scan_processes()))
+
+
+def collect_inventory() -> list[Asset]:
+    """Perform a complete one-shot scan for CLI commands and diagnostics."""
+    return _merge_inventory((*scan_static_inventory(), *scan_processes()))

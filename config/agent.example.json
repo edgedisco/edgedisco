@@ -1,5 +1,7 @@
 {
   "server_url": "https://inventory.example.com",
   "enrollment_token": "replace-me",
-  "scan_interval_seconds": 300
+  "scan_interval_seconds": 300,
+  "process_poll_interval_seconds": 60,
+  "static_scan_interval_seconds": 900
 }
