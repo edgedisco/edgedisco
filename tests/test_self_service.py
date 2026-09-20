@@ -207,15 +207,18 @@ class CliLauncherTests(unittest.TestCase):
             self.assertFalse((home / ".local" / "bin" / "edgedisco").exists())
             self.assertIn(str(home / ".local" / "bin" / "edgedisco"), result["launcher_removed"])
 
-    def test_refuses_to_overwrite_unrelated_edgedisco_command(self):
+    def test_preserves_unrelated_edgedisco_command_and_uses_managed_bin(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             layout, _cli = self._layout_with_fake_cli(home)
             public = home / ".local" / "bin" / "edgedisco"
             public.parent.mkdir(parents=True)
             public.write_text("#!/bin/sh\necho not-ours\n")
-            with self.assertRaisesRegex(RuntimeError, "refusing to overwrite"):
-                install_cli_launcher(layout, home)
+            launcher = install_cli_launcher(layout, home)
+            self.assertEqual(public.read_text(), "#!/bin/sh\necho not-ours\n")
+            self.assertEqual(launcher.public, layout.bin / "edgedisco")
+            self.assertIn(str(layout.bin), (home / ".zprofile").read_text())
+            uninstall_cli_launcher(layout, home)
             self.assertEqual(public.read_text(), "#!/bin/sh\necho not-ours\n")
 
 

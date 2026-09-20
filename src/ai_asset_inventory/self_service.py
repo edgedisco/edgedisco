@@ -86,19 +86,8 @@ def _managed_launcher_path(layout: Layout) -> Path:
 
 
 def select_public_bin_dir(home: Path | None = None) -> tuple[Path, bool]:
-    """Pick a user-writable bin directory for the public ``edgedisco`` command.
-
-    Prefer ``/usr/local/bin`` when installing for the real user home and that
-    directory is writable, because it is already on the default macOS PATH.
-    Otherwise use ``~/.local/bin`` and integrate it via a managed ``~/.zprofile``
-    block. Custom ``home`` values (tests, alternate prefixes) always use the
-    home-local bin directory so system paths are never touched.
-    """
+    """Use the user's bin directory, ahead of older system commands on PATH."""
     home = home or Path.home()
-    if home.resolve() == Path.home().resolve():
-        usr_local = Path("/usr/local/bin")
-        if usr_local.is_dir() and os.access(usr_local, os.W_OK):
-            return usr_local, False
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True, exist_ok=True)
     return local_bin, True
@@ -153,7 +142,9 @@ def ensure_local_bin_on_path(home: Path | None = None, local_bin: Path | None = 
         # Consume a single trailing newline after the end marker when present.
         if end < len(existing) and existing[end] == "\n":
             end += 1
-        updated = existing[:start] + block + existing[end:]
+        # Put our block last so older PATH edits cannot shadow the launcher.
+        remaining = (existing[:start] + existing[end:]).rstrip()
+        updated = remaining + "\n\n" + block if remaining else block
     elif existing.strip():
         updated = existing.rstrip() + "\n\n" + block
     else:
@@ -192,14 +183,14 @@ def install_cli_launcher(layout: Layout, home: Path | None = None) -> CliLaunche
     managed = _write_managed_launcher(layout)
     public_dir, needs_path = select_public_bin_dir(home)
     public = public_dir / CLI_NAME
+    if (public.exists() or public.is_symlink()) and not _is_managed_public_launcher(public, managed):
+        # Preserve an unrelated command and put our managed bin first on PATH.
+        public_dir, public = layout.bin, managed
     if public.exists() or public.is_symlink():
-        if not _is_managed_public_launcher(public, managed):
-            raise RuntimeError(
-                f"refusing to overwrite existing command at {public}; "
-                "remove it or choose another install location"
-            )
-        public.unlink()
-    public.symlink_to(managed)
+        if public != managed:
+            public.unlink()
+    if public != managed:
+        public.symlink_to(managed)
     path_profile = ensure_local_bin_on_path(home, public_dir) if needs_path else None
     _atomic_write(_launcher_state_path(layout), f"{public}\n")
     return CliLauncher(

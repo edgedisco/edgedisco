@@ -116,9 +116,11 @@ edgedisco status
 edgedisco demo
 ```
 
+If `demo` is missing, open a new Terminal window and check `command -v edgedisco` and `edgedisco --help`. The command should resolve to the EdgeDisco managed launcher and the help should list `demo`. Rerun the installer to repair an incomplete installation; it preserves local evidence. If an unrelated virtual environment is active, deactivate it before checking command resolution in the current shell.
+
 The administrator token is stored in `~/.edgedisco/server.env`. Use the clipboard command in the tester quick start whenever the dashboard asks for it.
 
-Rerun `bash install.sh` to upgrade or repair the installation. Remove the background services while retaining local evidence with:
+Rerun the same installer command to upgrade or repair an incomplete installation. Remove the background services while retaining local evidence with:
 
 ```bash
 edgedisco uninstall
