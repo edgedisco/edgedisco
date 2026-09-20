@@ -339,9 +339,18 @@ def _launchctl(*arguments: str, check: bool = True) -> subprocess.CompletedProce
     return subprocess.run(["launchctl", *arguments], capture_output=True, text=True, check=check)
 
 
-def _restart_service(label: str, plist: Path) -> None:
+def _restart_service(label: str, plist: Path, *, wait_for_port: int | None = None) -> None:
     domain = f"gui/{os.getuid()}"
     _launchctl("bootout", f"{domain}/{label}", check=False)
+    if wait_for_port is not None:
+        deadline = time.monotonic() + 5
+        while _health(wait_for_port) is not None:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"port {wait_for_port} is still served after stopping {label}; "
+                    "refusing to verify the upgrade against a stale server"
+                )
+            time.sleep(0.2)
     result = _launchctl("bootstrap", domain, str(plist), check=False)
     if result.returncode != 0:
         raise RuntimeError(f"could not start {label}: {result.stderr.strip() or result.stdout.strip()}")
@@ -354,7 +363,7 @@ def _health(port: int, admin_token: str | None = None) -> dict[str, Any] | None:
     try:
         with urllib.request.urlopen(request, timeout=2) as response:
             return json.loads(response.read())
-    except (urllib.error.URLError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -365,6 +374,25 @@ def _wait_for_server(port: int, admin_token: str, timeout: int = 20) -> None:
             return
         time.sleep(0.5)
     raise RuntimeError("server did not become healthy; inspect ~/.edgedisco/logs/server.err.log")
+
+
+def _verify_browser_bootstrap(port: int, admin_token: str) -> None:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/v1/browser-bootstrap",
+        data=b"", method="POST", headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            path = json.load(response).get("bootstrap_path", "")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"EdgeDisco server on port {port} does not support automatic dashboard sign-in "
+            f"(HTTP {exc.code}); check for an older server process"
+        ) from None
+    except (OSError, ValueError, KeyError):
+        raise RuntimeError(f"Could not verify automatic dashboard sign-in on port {port}") from None
+    if not isinstance(path, str) or not path.startswith("/browser-bootstrap/"):
+        raise RuntimeError(f"Unexpected browser bootstrap response from port {port}")
 
 
 def detect_adapters(home: Path | None = None) -> list[str]:
@@ -398,8 +426,9 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
             f"port {selected_port} is already used by a server with different credentials; "
             "stop it or rerun setup with --port another-port"
         )
-    _restart_service(SERVER_LABEL, server_plist)
+    _restart_service(SERVER_LABEL, server_plist, wait_for_port=selected_port if existing else None)
     _wait_for_server(selected_port, values["AAI_ADMIN_TOKEN"])
+    _verify_browser_bootstrap(selected_port, values["AAI_ADMIN_TOKEN"])
 
     current = {}
     if layout.config.exists():

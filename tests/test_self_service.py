@@ -20,6 +20,9 @@ from ai_asset_inventory.self_service import (
     install_cli_launcher,
     ensure_local_server,
     setup_macos,
+    _restart_service,
+    _verify_browser_bootstrap,
+    _health,
     uninstall_cli_launcher,
     uninstall_macos,
     write_launch_agents,
@@ -55,6 +58,33 @@ class FakeAgentClient:
 
 
 class SelfServiceTests(unittest.TestCase):
+    @patch("ai_asset_inventory.self_service.urllib.request.urlopen", side_effect=ConnectionResetError())
+    def test_health_treats_shutdown_connection_reset_as_stopped(self, _urlopen):
+        self.assertIsNone(_health(8090))
+
+    @patch("ai_asset_inventory.self_service.time.monotonic", side_effect=[0, 11])
+    @patch("ai_asset_inventory.self_service._health", return_value={"status": "ok"})
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_restart_rejects_stale_server_still_on_port(self, launchctl, _health, _clock):
+        with self.assertRaisesRegex(RuntimeError, "stale server"):
+            _restart_service(SERVER_LABEL, Path("/tmp/unused.plist"), wait_for_port=8090)
+        self.assertEqual(launchctl.call_count, 1)
+        self.assertEqual(launchctl.call_args.args[0], "bootout")
+
+    @patch("ai_asset_inventory.self_service.urllib.request.urlopen")
+    def test_browser_bootstrap_verification_uses_configured_port(self, urlopen):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b'{"bootstrap_path":"/browser-bootstrap/test-code"}'
+        urlopen.return_value = Response()
+        for port in (8080, 8090, 49152):
+            _verify_browser_bootstrap(port, "test-admin-token")
+            self.assertEqual(
+                urlopen.call_args.args[0].full_url,
+                f"http://127.0.0.1:{port}/api/v1/browser-bootstrap",
+            )
+
     @patch("ai_asset_inventory.self_service._health", return_value={"assets": 0})
     @patch("ai_asset_inventory.self_service.setup_macos")
     def test_demo_reuses_healthy_server(self, setup, health):
@@ -106,11 +136,12 @@ class SelfServiceTests(unittest.TestCase):
     @patch("ai_asset_inventory.self_service._health", return_value=None)
     @patch("ai_asset_inventory.self_service._restart_service")
     @patch("ai_asset_inventory.self_service._wait_for_server")
+    @patch("ai_asset_inventory.self_service._verify_browser_bootstrap")
     @patch("ai_asset_inventory.self_service.install_adapters", return_value=[])
     @patch("ai_asset_inventory.self_service.detect_adapters", return_value=["cursor"])
     @patch("ai_asset_inventory.self_service.AgentClient", FakeAgentClient)
     def test_setup_enrolls_and_sends_initial_inventory(
-        self, _detect, _install, _wait, restart, _health, _system
+        self, _detect, _install, _verify, _wait, restart, _health, _system
     ):
         with tempfile.TemporaryDirectory() as temp:
             result = setup_macos(

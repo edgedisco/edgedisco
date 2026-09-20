@@ -10,10 +10,13 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import urllib.request
+import urllib.error
 import http.cookiejar
 from pathlib import Path
+from ai_asset_inventory.database import Database
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -127,6 +130,14 @@ class InstallerTests(unittest.TestCase):
                 f"export AAI_ENROLLMENT_TOKEN={enrollment_token}\n"
                 f"EDGEDISCO_PORT={port}\n"
             )
+            old_database = Database(root / "data/inventory.db")
+            old_device, _ = old_database.enroll({"hostname": "existing-host", "os": "Darwin"})
+            old_database.ingest(old_device, {
+                "scan_id": "existing-scan", "observed_at": "2026-09-19T00:00:00+00:00",
+                "assets": [{"fingerprint": "existing-evidence", "kind": "application",
+                            "name": "Existing EdgeDisco Evidence", "vendor": "Test", "running": False}],
+                "privacy": {"content_captured": False},
+            })
             env = dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(root),
                        EDGEDISCO_ARCHIVE_URL=archive.as_uri(),
                        VIRTUAL_ENV=str(unrelated),
@@ -136,7 +147,45 @@ class InstallerTests(unittest.TestCase):
                        PATH=f"{unrelated / 'bin'}:{fake_bin}:{os.environ.get('PATH', '')}")
             env.pop("PYTHON_BIN", None)
             env.pop("PYTHONPATH", None)
+            # An already-running pre-bootstrap server must be stopped before
+            # setup can accept the upgraded server as healthy.
+            old_code = (
+                "import os, sys\n"
+                "from pathlib import Path\n"
+                "from ai_asset_inventory.database import Database\n"
+                "from ai_asset_inventory.server import InventoryServer, RequestHandler\n"
+                "original = RequestHandler.do_POST\n"
+                "def legacy(self):\n"
+                "    if self.path == '/api/v1/browser-bootstrap':\n"
+                "        return self._json(404, {'error': 'not found'})\n"
+                "    return original(self)\n"
+                "RequestHandler.do_POST = legacy\n"
+                "InventoryServer(('127.0.0.1', int(sys.argv[1])), Database(Path(sys.argv[2])), "
+                "os.environ['AAI_ADMIN_TOKEN'], os.environ['AAI_ENROLLMENT_TOKEN']).serve_forever()\n"
+            )
+            old_env = dict(env, PYTHONPATH=str(REPO / "src"),
+                           AAI_ADMIN_TOKEN=admin_token, AAI_ENROLLMENT_TOKEN=enrollment_token)
+            old_server = subprocess.Popen(
+                [sys.executable, "-c", old_code, str(port), str(root / "data/inventory.db")],
+                env=old_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
             try:
+                for _ in range(50):
+                    try:
+                        urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=0.2).close()
+                        break
+                    except urllib.error.URLError:
+                        time.sleep(0.1)
+                self.assertIsNone(old_server.poll())
+                old_probe = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/v1/browser-bootstrap", data=b"",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as old_error:
+                    urllib.request.urlopen(old_probe)
+                self.assertEqual(old_error.exception.code, 404)
+
                 broken_script = SCRIPT.replace('SETUP_ARGS=(--root "$INSTALL_ROOT")', 'SETUP_ARGS=()')
                 self.assertNotEqual(broken_script, SCRIPT)
                 nounset = subprocess.run(
@@ -149,12 +198,33 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn("Bootstrapping pip", nounset.stdout)
                 self.assertFalse((root / "cli-launcher.path").exists())
 
+                stale = subprocess.run(
+                    ["/bin/bash", "-c", SCRIPT, "--", "--yes", "--no-open"],
+                    env=env, capture_output=True, text=True, timeout=180,
+                )
+                self.assertNotEqual(stale.returncode, 0)
+                self.assertIn("stale server", stale.stderr)
+                self.assertNotIn("EdgeDisco installation verified.", stale.stdout)
+                self.assertIsNone(old_server.poll())
+
+                (state / "com.edgedisco.server").write_text(str(old_server.pid))
+
                 remote = subprocess.run(
                     ["/bin/bash", "-c", SCRIPT], env=env, input="y\n",
                     capture_output=True, text=True, timeout=180,
                 )
                 self.assertEqual(remote.returncode, 0, remote.stderr)
                 self.assertIn("EdgeDisco installation verified.", remote.stdout)
+                old_server.wait(timeout=5)
+                with urllib.request.urlopen(old_probe, timeout=5) as upgraded:
+                    self.assertEqual(upgraded.status, 201)
+                with urllib.request.urlopen(urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/v1/summary",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                ), timeout=5) as response:
+                    upgraded_inventory = json.load(response)
+                self.assertIn("Existing EdgeDisco Evidence",
+                              {row["name"] for row in upgraded_inventory["items"]})
                 self.assertIn("Another edgedisco command is currently active from:", remote.stdout)
                 self.assertIn(str(old_cli), remote.stdout)
                 self.assertIn(str(root / "bin/edgedisco") + " demo", remote.stdout)
@@ -263,6 +333,9 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(evidence.read_text(), "preserve")
                 self.assertEqual(sentinel.read_text(), "untouched")
             finally:
+                if old_server.poll() is None:
+                    old_server.terminate()
+                    old_server.wait(timeout=5)
                 pidfile = state / "com.edgedisco.server"
                 if pidfile.exists():
                     import signal

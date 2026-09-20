@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -400,14 +401,15 @@ def run_demo(
                 if not path.startswith("/browser-bootstrap/") or "/" in path[len("/browser-bootstrap/"):]:
                     raise ValueError("invalid browser bootstrap response")
                 browser_url = server.dashboard + path
-            except Exception:
-                _print(out, f"Automatic browser sign-in unavailable. Visit {server.dashboard} and use manual admin-token sign-in if prompted.")
+            except Exception as exc:
+                reason = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else "request failed"
+                _print(out, f"WARNING: Automatic dashboard sign-in failed ({reason}). Demo evidence was saved. Visit {server.dashboard}; manual admin-token sign-in may be required.")
         try:
             opened = (browser_fn or webbrowser.open)(browser_url)
             if not opened:
                 _print(out, f"Browser did not open. Visit {server.dashboard}; manual admin-token sign-in is available.")
-        except Exception as exc:  # Browser is optional after successful persistence.
-            _print(out, f"Browser did not open ({exc}). Visit {server.dashboard}; manual admin-token sign-in is available.")
+        except Exception:  # Browser is optional after successful persistence.
+            _print(out, f"Browser did not open. Visit {server.dashboard}; manual admin-token sign-in is available.")
         return 0
     except Exception as exc:  # noqa: BLE001 — demo must always clean up
         _print(out, f"Demo failed: {exc}")

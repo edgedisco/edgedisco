@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import unittest
 from unittest.mock import patch
 
@@ -150,6 +151,31 @@ class DemoUnitTests(unittest.TestCase):
         self.assertEqual(events, ["persist", "issue", "browser"])
         self.assertNotIn("secret-admin-token", out.getvalue())
         self.assertNotIn("manual admin-token", out.getvalue())
+
+    def test_bootstrap_failure_warns_before_opening_plain_dashboard(self):
+        assets = [_asset(name) for name in EXPECTED_RUNTIME_NAMES]
+        from types import SimpleNamespace
+        server = SimpleNamespace(agent_config="config", dashboard="http://127.0.0.1:8090",
+                                 admin_token="private-admin-token")
+        class Client:
+            def __init__(self, path): pass
+            def submit_assets(self, evidence):
+                return {"status": "accepted", "asset_count": len(evidence)}
+        opened = []
+        out = io.StringIO()
+        failure = urllib.error.HTTPError(
+            "http://127.0.0.1:8090/api/v1/browser-bootstrap", 404, "Not Found", {}, None,
+        )
+        with patch("ai_asset_inventory.demo.fixture_assets", side_effect=lambda lab, found: found), \
+             patch("ai_asset_inventory.demo.urllib.request.urlopen", side_effect=failure):
+            code = run_demo(stream=out, inventory_fn=lambda: assets, timeout=2,
+                            server_fn=lambda: server, client_fn=Client,
+                            browser_fn=lambda url: opened.append(url) or True)
+        self.assertEqual(code, 0)
+        self.assertEqual(opened, [server.dashboard])
+        self.assertIn("WARNING: Automatic dashboard sign-in failed (HTTP 404)", out.getvalue())
+        self.assertIn("Demo evidence was saved", out.getvalue())
+        self.assertNotIn("private-admin-token", out.getvalue())
 
     def test_no_browser_when_report_rejected(self):
         assets = [_asset(name) for name in EXPECTED_RUNTIME_NAMES]
