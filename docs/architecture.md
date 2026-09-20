@@ -88,3 +88,4 @@ sequenceDiagram
 - Administrator access is independent from endpoint upload access.
 - The database and backups contain compliance evidence and require restricted access.
 - macOS collection is per-user and unprivileged. Root LaunchDaemons are intentionally unsupported because they inspect the wrong user and expand privilege without improving coverage.
+- Linux self-service collection is also per-user and unprivileged. Supported hosts use `systemd --user` units for the local server and collector. The installer requires an active user manager, refuses root execution, and does not enable lingering; containers, non-systemd systems, and sessions without a user manager use manual deployment.

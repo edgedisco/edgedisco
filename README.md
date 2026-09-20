@@ -71,9 +71,11 @@ See [Architecture](docs/architecture.md) for the data flow and trust boundaries.
 - Ordinary permission to list the current user's processes
 - HTTPS ingress for any non-local deployment
 
-## Self-service install on macOS
+## Self-service install on macOS and Linux
 
-The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the Mac, installs adapters for detected AI applications, starts the server and collector at login, and opens the dashboard. It does not use `sudo` or request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring.
+The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the endpoint, installs adapters for detected AI applications, starts per-user services, and opens the dashboard. macOS uses LaunchAgents. Supported Linux uses `systemd --user`. It does not use `sudo`; on macOS it does not request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring.
+
+Linux self-service support requires systemd, an active non-root user manager, and Python 3.9+. Containers, WSL without systemd, non-systemd distributions, and service accounts without a user session use the manual or container deployment paths. See [Deploy on Linux](docs/deployment-linux.md) for the exact support boundary.
 
 ### Tester quick start
 
@@ -144,13 +146,13 @@ Rerun the same installer command to upgrade or repair an incomplete installation
 edgedisco uninstall
 ```
 
-Add `--purge` only when you also want to delete credentials, logs, configuration, and collected evidence. See the [macOS self-service guide](docs/deployment-macos.md) for testing and troubleshooting.
+Add `--purge` only when you also want to delete credentials, logs, configuration, and collected evidence. See the [macOS](docs/deployment-macos.md) or [Linux](docs/deployment-linux.md) self-service guide for testing and troubleshooting.
 
 ## Try the EdgeDisco Demo
 
 See Edge Discovery in action without API keys, paid LLMs, Docker, or network access.
 
-**After macOS self-service install** (no repo checkout, no development venv):
+**After macOS or supported Linux self-service install** (no repo checkout, no development venv):
 
 ```bash
 edgedisco demo
@@ -179,7 +181,7 @@ python3 -m venv .venv
 python -m pip install -e .
 ```
 
-This editable install registers the `edgedisco` (and `ai-inventory`) console scripts on your PATH **only while the virtual environment is active**. Without activating `.venv`, use `.venv/bin/edgedisco` instead. After the macOS self-service install, a normal Terminal can run `edgedisco` without activating any development venv.
+This editable install registers the `edgedisco` (and `ai-inventory`) console scripts on your PATH **only while the virtual environment is active**. Without activating `.venv`, use `.venv/bin/edgedisco` instead. After a macOS or supported Linux self-service install, a normal shell can run `edgedisco` without activating any development venv.
 
 Generate two different server credentials:
 
@@ -259,7 +261,7 @@ See [Runtime adapters](docs/runtime-adapters.md) for app-specific details and th
 
 ## Managed deployment
 
-For self-service testing and managed macOS deployment guidance, see [Deploy on macOS](docs/deployment-macos.md).
+For self-service guidance, see [Deploy on macOS](docs/deployment-macos.md) and [Deploy on Linux](docs/deployment-linux.md).
 
 Other deployment assets:
 
@@ -438,7 +440,7 @@ The GitHub Actions workflow installs the package, then runs the test suite on Py
 - The built-in MCP listener is localhost-only; production remote MCP authentication must be supplied by an HTTPS proxy or API gateway.
 - Automated retention, device-token revocation, and SSO are not implemented.
 - Detection is signature-based and should be aligned with the organization's approved and prohibited application catalog.
-- A native signed installer is not included; the macOS self-service installer is a reviewable shell script.
+- A native signed installer is not included; macOS and supported Linux use a reviewable shell installer.
 
 ## Responsible deployment
 

@@ -1,5 +1,7 @@
 # Deploy on macOS
 
+For systemd-based Linux, use the separate [Linux deployment guide](deployment-linux.md).
+
 This guide runs the EdgeDisco server and collector on one Mac for evaluation. A production rollout should host the server centrally behind HTTPS and install only the collector on managed endpoints.
 
 ## Self-service installation
