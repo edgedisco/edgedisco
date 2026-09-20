@@ -37,14 +37,19 @@ def validate_report(payload):
     _object(payload, {"schema_version", "scan_id", "observed_at", "device", "assets", "privacy"}, "report")
     if not {"scan_id", "observed_at", "device", "assets", "privacy"} <= set(payload):
         raise ValueError("missing report fields")
-    if type(payload.get("schema_version", 1)) is not int or payload.get("schema_version", 1) != 1:
+    schema_version = payload.get("schema_version", 1)
+    if type(schema_version) is not int or schema_version not in {1, 2}:
         raise ValueError("unsupported schema version")
     _string(payload["scan_id"], 128, "scan ID")
     timestamp(payload["observed_at"])
     validate_device(payload["device"])
     privacy = payload["privacy"]
     expected = {"content_captured": False, "secrets_captured": False, "paths_hashed": True, "command_lines_hashed": True}
+    if schema_version == 2:
+        expected["binary_contents_hashed"] = True
     _object(privacy, expected, "privacy")
+    if schema_version == 2 and set(privacy) != set(expected):
+        raise ValueError("missing privacy flags")
     if any(type(value) is not bool or value != expected[key] for key, value in privacy.items()):
         raise ValueError("invalid privacy flags")
     assets = payload["assets"]
@@ -53,17 +58,35 @@ def validate_report(payload):
     metadata_strings = {"executable", "package", "configured_in", "transport", "host_app", "runtime", "relationship", "evidence_label", "discovery_source"}
     seen = set()
     for asset in assets:
-        _object(asset, {"fingerprint", "kind", "name", "vendor", "version", "running", "path_hash", "command_hash", "metadata"}, "asset")
+        allowed_asset_fields = {
+            "fingerprint", "kind", "name", "vendor", "version", "running",
+            "path_hash", "command_hash", "metadata",
+        }
+        if schema_version == 2:
+            allowed_asset_fields |= {
+                "binary_sha256", "binary_fingerprint_status", "fingerprint_library_version",
+            }
+        _object(asset, allowed_asset_fields, "asset")
         for key in ("fingerprint", "kind", "name", "vendor"):
             _string(asset.get(key), 255, key)
         if asset["kind"] not in {"application", "process", "agent_runtime", "mcp_server"}:
             raise ValueError("unsupported asset kind")
         if type(asset.get("running")) is not bool:
             raise ValueError("running must be boolean")
-        for key in ("fingerprint", "path_hash", "command_hash"):
+        for key in ("fingerprint", "path_hash", "command_hash", "binary_sha256"):
             value = asset.get(key)
             if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)):
                 raise ValueError(f"invalid {key}")
+        binary_sha256 = asset.get("binary_sha256")
+        binary_status = asset.get("binary_fingerprint_status")
+        library_version = asset.get("fingerprint_library_version")
+        if binary_sha256 is None:
+            if binary_status is not None or library_version is not None:
+                raise ValueError("binary fingerprint metadata requires binary_sha256")
+        else:
+            if binary_status not in {"matched", "unlisted"}:
+                raise ValueError("invalid binary fingerprint status")
+            _string(library_version, 64, "fingerprint library version")
         if asset["fingerprint"] in seen:
             raise ValueError("duplicate asset fingerprint")
         seen.add(asset["fingerprint"])

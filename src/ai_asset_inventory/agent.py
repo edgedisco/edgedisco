@@ -79,7 +79,7 @@ class AgentClient:
     def scan_payload(self) -> dict[str, Any]:
         assets = [asset.to_dict() for asset in collect_inventory()]
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "scan_id": str(uuid.uuid4()),
             "observed_at": _utc_now(),
             "device": device_metadata(),
@@ -89,6 +89,7 @@ class AgentClient:
                 "secrets_captured": False,
                 "paths_hashed": True,
                 "command_lines_hashed": True,
+                "binary_contents_hashed": True,
             },
         }
 
@@ -105,7 +106,7 @@ class AgentClient:
         if not self.config.get("device_token"):
             self.enroll()
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scan_id": str(uuid.uuid4()),
             "observed_at": _utc_now(),
             "device": device_metadata(),
@@ -118,6 +119,7 @@ class AgentClient:
                 "secrets_captured": False,
                 "paths_hashed": True,
                 "command_lines_hashed": True,
+                "binary_contents_hashed": True,
             },
         }
         return self._request("/api/v1/reports", payload, self.config["device_token"])

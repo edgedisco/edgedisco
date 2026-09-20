@@ -17,7 +17,7 @@ from .validation import timestamp
 OTLP_MAX_PENDING = 5_000
 OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 OTLP_MAX_AGE_DAYS = 7
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 
 # Runtime uploads do not establish process-inventory freshness.
 FRESH_SCAN = """EXISTS (SELECT 1 FROM scans fresh WHERE fresh.device_id=a.device_id
@@ -83,7 +83,9 @@ class Database:
                 CREATE TABLE IF NOT EXISTS assets (
                     device_id TEXT NOT NULL REFERENCES devices(id), fingerprint TEXT NOT NULL,
                     kind TEXT NOT NULL, name TEXT NOT NULL, vendor TEXT NOT NULL,
-                    version TEXT, path_hash TEXT, command_hash TEXT, metadata_json TEXT NOT NULL,
+                    version TEXT, path_hash TEXT, command_hash TEXT,
+                    binary_sha256 TEXT, binary_fingerprint_status TEXT,
+                    fingerprint_library_version TEXT, metadata_json TEXT NOT NULL,
                     running INTEGER NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
                     PRIMARY KEY(device_id, fingerprint)
                 );
@@ -135,8 +137,17 @@ class Database:
                 );
                 INSERT OR IGNORE INTO otlp_export_status(id) VALUES(1);
             """)
-            # Version 0 is the original unversioned schema. DDL and the version
-            # marker commit together; failed migrations roll back together.
+            if version < 2:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+                for column in (
+                    "binary_sha256 TEXT",
+                    "binary_fingerprint_status TEXT",
+                    "fingerprint_library_version TEXT",
+                ):
+                    if column.split()[0] not in columns:
+                        conn.execute(f"ALTER TABLE assets ADD COLUMN {column}")
+            # DDL and the version marker commit together; failed migrations
+            # roll back together.
             conn.execute(f"PRAGMA user_version={DATABASE_VERSION}")
 
     def enroll(self, metadata: dict[str, Any]) -> tuple[str, str]:
@@ -185,17 +196,23 @@ class Database:
             for item in assets:
                 conn.execute("""
                     INSERT INTO assets(device_id,fingerprint,kind,name,vendor,version,path_hash,
-                      command_hash,metadata_json,running,first_seen,last_seen)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                      command_hash,binary_sha256,binary_fingerprint_status,
+                      fingerprint_library_version,metadata_json,running,first_seen,last_seen)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(device_id,fingerprint) DO UPDATE SET
                       kind=excluded.kind,name=excluded.name,vendor=excluded.vendor,
                       version=excluded.version,path_hash=excluded.path_hash,
-                      command_hash=excluded.command_hash,metadata_json=excluded.metadata_json,
+                      command_hash=excluded.command_hash,binary_sha256=excluded.binary_sha256,
+                      binary_fingerprint_status=excluded.binary_fingerprint_status,
+                      fingerprint_library_version=excluded.fingerprint_library_version,
+                      metadata_json=excluded.metadata_json,
                       running=excluded.running,last_seen=excluded.last_seen
                 """, (device_id, str(item.get("fingerprint", ""))[:128],
                       str(item.get("kind", "unknown"))[:64], str(item.get("name", "unknown"))[:255],
                       str(item.get("vendor", "Unknown"))[:255], item.get("version"),
                       item.get("path_hash"), item.get("command_hash"),
+                      item.get("binary_sha256"), item.get("binary_fingerprint_status"),
+                      item.get("fingerprint_library_version"),
                       json.dumps(item.get("metadata", {}), sort_keys=True),
                       1 if item.get("running") else 0, observed_at, observed_at))
             if self.otlp_enabled:
@@ -481,11 +498,16 @@ class Database:
 
     def export_csv(self) -> str:
         output = io.StringIO()
-        fields = ["device_id", "hostname", "os", "kind", "name", "vendor", "running", "first_seen", "last_seen", "stale"]
+        fields = [
+            "device_id", "hostname", "os", "kind", "name", "vendor", "version",
+            "binary_sha256", "binary_fingerprint_status", "fingerprint_library_version",
+            "running", "first_seen", "last_seen", "stale",
+        ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         with self.connect() as conn:
-            for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,
+            for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
+                a.binary_sha256,a.binary_fingerprint_status,a.fingerprint_library_version,
                 (a.running AND {FRESH_SCAN}) AS running,a.first_seen,a.last_seen,(NOT {FRESH_SCAN}) AS stale
                 FROM assets a JOIN devices d ON d.id=a.device_id ORDER BY a.last_seen DESC"""):
                 item = dict(row)

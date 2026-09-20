@@ -39,4 +39,4 @@ edgedisco = "ai_asset_inventory.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ai_asset_inventory = ["dashboard.html"]
+ai_asset_inventory = ["dashboard.html", "fingerprints.json"]

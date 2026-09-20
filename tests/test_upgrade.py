@@ -72,9 +72,44 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(upgraded.device_for_token(token)["id"], device)
         with upgraded.connect() as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], DATABASE_VERSION)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+            self.assertIn("binary_sha256", columns)
+            self.assertIn("binary_fingerprint_status", columns)
+            self.assertIn("fingerprint_library_version", columns)
             conn.execute("PRAGMA user_version=999")
         with self.assertRaisesRegex(RuntimeError, "newer"):
             Database(path)
+
+    def test_version_one_asset_rows_gain_binary_columns_without_data_loss(self):
+        path = self.root / "legacy.db"
+        with sqlite3.connect(path) as conn:
+            conn.executescript("""
+                CREATE TABLE assets (
+                    device_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    kind TEXT NOT NULL, name TEXT NOT NULL, vendor TEXT NOT NULL,
+                    version TEXT, path_hash TEXT, command_hash TEXT, metadata_json TEXT NOT NULL,
+                    running INTEGER NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+                    PRIMARY KEY(device_id, fingerprint)
+                );
+                INSERT INTO assets VALUES(
+                    'device', 'fingerprint', 'application', 'Existing', 'Vendor',
+                    '1.0', 'path', NULL, '{}', 0, 'before', 'before'
+                );
+                PRAGMA user_version=1;
+            """)
+        Database(path)
+        with sqlite3.connect(path) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+            row = conn.execute(
+                "SELECT name,version,binary_sha256,binary_fingerprint_status,"
+                "fingerprint_library_version FROM assets"
+            ).fetchone()
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], DATABASE_VERSION)
+        self.assertEqual(
+            columns & {"binary_sha256", "binary_fingerprint_status", "fingerprint_library_version"},
+            {"binary_sha256", "binary_fingerprint_status", "fingerprint_library_version"},
+        )
+        self.assertEqual(row, ("Existing", "1.0", None, None, None))
 
     def test_failed_migration_rolls_back_ddl_and_version(self):
         path = self.root / "broken.db"

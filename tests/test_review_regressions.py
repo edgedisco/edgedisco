@@ -62,6 +62,7 @@ class ReviewRegressions(unittest.TestCase):
         RequestHandler._validate_report(valid)
         for field, value in (("metadata", {"prompt": "private"}),
                              ("path_hash", "/private/path"), ("command_hash", "raw command"),
+                             ("binary_sha256", "not-a-hash"),
                              ("version", {"secret": "private"}), ("credentials", "secret")):
             invalid = copy.deepcopy(valid)
             invalid["assets"][0][field] = value
@@ -72,6 +73,19 @@ class ReviewRegressions(unittest.TestCase):
                         {**valid, "device": {"token": "private"}}):
             with self.assertRaises(ValueError):
                 RequestHandler._validate_report(invalid)
+        version_two = copy.deepcopy(valid)
+        version_two["schema_version"] = 2
+        version_two["privacy"] = {
+            "content_captured": False, "secrets_captured": False,
+            "paths_hashed": True, "command_lines_hashed": True,
+            "binary_contents_hashed": True,
+        }
+        version_two["assets"][0].update({
+            "binary_sha256": "a" * 64,
+            "binary_fingerprint_status": "unlisted",
+            "fingerprint_library_version": "2026-09-20",
+        })
+        RequestHandler._validate_report(version_two)
 
     def test_late_scans_and_events_do_not_replace_newer_state(self):
         self.db.ingest(self.device, report("new", [asset()], "2026-09-20T02:00:00.000002+00:00"))

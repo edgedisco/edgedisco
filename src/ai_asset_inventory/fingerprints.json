@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-20",
+  "hash_algorithm": "sha256",
+  "agents": [
+    {
+      "name": "Claude Code",
+      "vendor": "Anthropic",
+      "executables": ["claude", "claude.exe"],
+      "package_markers": ["@anthropic-ai/claude-code", "/bin/claude"],
+      "display_markers": ["claude code", "@anthropic-ai/claude-code"],
+      "sources": ["https://docs.anthropic.com/en/docs/claude-code/getting-started"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "OpenAI Codex",
+      "vendor": "OpenAI",
+      "executables": ["codex", "codex.exe"],
+      "package_markers": ["@openai/codex", "/bin/codex"],
+      "display_markers": ["openai codex", "@openai/codex"],
+      "sources": ["https://github.com/openai/codex"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Gemini CLI",
+      "vendor": "Google",
+      "executables": ["gemini", "gemini.exe"],
+      "package_markers": ["@google/gemini-cli", "/bin/gemini"],
+      "display_markers": ["gemini cli", "@google/gemini-cli"],
+      "sources": ["https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/installation.mdx"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Cursor Agent",
+      "vendor": "Anysphere",
+      "executables": ["cursor-agent", "cursor-agent.exe"],
+      "package_markers": ["cursor-agent"],
+      "display_markers": ["cursor agent", "cursor-agent"],
+      "sources": ["https://docs.cursor.com/en/cli/installation"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "GitHub Copilot",
+      "vendor": "GitHub",
+      "executables": ["copilot", "copilot.exe"],
+      "package_markers": ["@github/copilot", "/bin/copilot"],
+      "display_markers": ["github copilot cli", "@github/copilot"],
+      "sources": ["https://docs.github.com/en/copilot/get-started/cli-quickstart"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Cline",
+      "vendor": "Cline",
+      "executables": ["cline", "cline.exe"],
+      "package_markers": ["node_modules/cline/", "/bin/cline"],
+      "display_markers": ["cline"],
+      "sources": ["https://github.com/cline/cline/blob/main/docs/getting-started/installing-cline.mdx"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Aider",
+      "vendor": "Aider",
+      "executables": ["aider", "aider.exe"],
+      "package_markers": ["aider-chat", "/bin/aider"],
+      "display_markers": ["aider"],
+      "sources": ["https://github.com/Aider-AI/aider"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "OpenCode",
+      "vendor": "Anomaly",
+      "executables": ["opencode", "opencode.exe"],
+      "package_markers": ["/bin/opencode"],
+      "display_markers": ["opencode"],
+      "sources": ["https://github.com/anomalyco/opencode"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Goose",
+      "vendor": "Agentic AI Foundation",
+      "executables": ["goose", "goose.exe"],
+      "package_markers": ["/bin/goose"],
+      "display_markers": ["goose"],
+      "sources": ["https://github.com/aaif-goose/goose"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Continue",
+      "vendor": "Continue",
+      "executables": ["cn", "cn.exe"],
+      "package_markers": ["@continuedev", "/bin/cn"],
+      "display_markers": ["continue cli"],
+      "sources": ["https://docs.continue.dev/cli/quickstart"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Kiro CLI",
+      "vendor": "AWS",
+      "executables": ["kiro-cli", "kiro-cli.exe"],
+      "package_markers": ["kiro-cli"],
+      "display_markers": ["kiro cli", "kiro-cli"],
+      "sources": ["https://kiro.dev/docs/cli/reference/cli-commands/"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Amp",
+      "vendor": "Amp",
+      "executables": ["amp", "amp.exe"],
+      "package_markers": ["@ampcode/cli", "@sourcegraph/amp", "/bin/amp"],
+      "display_markers": ["amp cli", "@ampcode/cli"],
+      "sources": ["https://ampcode.com/docs/cli"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Qwen Code",
+      "vendor": "Alibaba Cloud",
+      "executables": ["qwen", "qwen.exe"],
+      "package_markers": ["@qwen-code/qwen-code", "/bin/qwen"],
+      "display_markers": ["qwen code", "@qwen-code/qwen-code"],
+      "sources": ["https://github.com/QwenLM/qwen-code"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "SWE-agent",
+      "vendor": "SWE-agent",
+      "executables": ["sweagent", "sweagent.exe"],
+      "package_markers": ["sweagent"],
+      "display_markers": ["swe-agent", "sweagent"],
+      "sources": ["https://github.com/SWE-agent/SWE-agent/blob/main/docs/usage/hello_world.md"],
+      "binary_fingerprints": []
+    }
+  ]
+}

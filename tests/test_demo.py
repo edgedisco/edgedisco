@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.error
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from ai_asset_inventory import detector
@@ -209,6 +210,11 @@ class DemoUnitTests(unittest.TestCase):
         )
         checks = dict(privacy_check_results([bad]))
         self.assertFalse(checks["No raw command lines stored"])
+
+    def test_privacy_fails_if_binary_digest_is_not_sha256(self):
+        bad = replace(_asset("CrewAI"), binary_sha256="not-a-sha256")
+        checks = dict(privacy_check_results([bad]))
+        self.assertFalse(checks["Binary fingerprints contain only SHA-256 digests"])
 
 
 class DemoLabLifecycleTests(unittest.TestCase):

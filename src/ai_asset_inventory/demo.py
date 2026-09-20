@@ -264,10 +264,18 @@ def privacy_check_results(assets: list[Asset]) -> list[tuple[str, bool]]:
             blobs.append(asset.path_hash)
         if asset.command_hash:
             blobs.append(asset.command_hash)
+        if asset.binary_sha256:
+            blobs.append(asset.binary_sha256)
     serialized = " ".join(blobs).lower()
+    hashes_well_formed = all(
+        asset.binary_sha256 is None
+        or (len(asset.binary_sha256) == 64 and all(char in "0123456789abcdef" for char in asset.binary_sha256))
+        for asset in check_assets
+    )
     return [
         ("No prompts collected", "prompt" not in serialized and "user_message" not in serialized),
         ("No responses collected", "response" not in serialized and "completion" not in serialized),
+        ("Binary fingerprints contain only SHA-256 digests", hashes_well_formed),
         (
             "No credentials collected",
             "api_key" not in serialized
