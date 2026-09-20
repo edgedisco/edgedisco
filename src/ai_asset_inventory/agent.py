@@ -9,6 +9,8 @@ import os
 import urllib.error
 import urllib.request
 import uuid
+import queue
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -170,31 +172,84 @@ class AgentClient:
             10,
             min(report_interval, int(self.config.get("process_poll_interval_seconds", 60))),
         )
-        backoff = 5
-        last_report = 0.0
-        last_state: str | None = None
-        while True:
+        pending: queue.Queue = queue.Queue(maxsize=1)
+        stop = threading.Event()
+        workers = [
+            threading.Thread(target=self._upload_inventory, args=(pending, stop, report_interval), daemon=True),
+            threading.Thread(target=self._upload_runtime, args=(stop, poll_interval), daemon=True),
+        ]
+        for worker in workers:
+            worker.start()
+        try:
+            self._collect_loop(pending, stop, poll_interval)
+        finally:
+            stop.set()
+            for worker in workers:
+                worker.join(timeout=2)
+
+    def _collect_loop(self, pending: queue.Queue, stop: threading.Event, poll_interval: float) -> None:
+        while not stop.is_set():
+            started = time.monotonic()
             try:
-                assets = self.scanner.collect_inventory()
-                state = _inventory_state(assets)
-                now = time.monotonic()
-                if state != last_state or now - last_report >= report_interval:
-                    result = self.send_once(assets)
-                    last_state = state
-                    last_report = now
-                    print(
-                        f"inventory accepted: {result.get('asset_count', 0)} assets; "
-                        f"{result.get('runtime_event_count', 0)} runtime events",
-                        flush=True,
-                    )
-                else:
-                    self.flush_runtime_events()
-                backoff = 5
-                time.sleep(poll_interval)
+                payload = self.scan_payload(self.scanner.collect_inventory())
+                # Only the newest complete snapshot is useful after an outage.
+                # Raw process rows never cross this queue boundary.
+                try:
+                    pending.get_nowait()
+                except queue.Empty:
+                    pass
+                pending.put_nowait(payload)
             except Exception as exc:
-                print(f"inventory upload failed: {exc}", flush=True)
-                time.sleep(backoff)
+                print(f"inventory scan unavailable: {type(exc).__name__}", flush=True)
+                try:
+                    pending.get_nowait()
+                except queue.Empty:
+                    pass
+            stop.wait(max(0, poll_interval - (time.monotonic() - started)))
+
+    def _upload_inventory(self, pending: queue.Queue, stop: threading.Event, report_interval: int) -> None:
+        last_state = None
+        last_report = 0.0
+        backoff = 5
+        while not stop.is_set():
+            try:
+                payload = pending.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            state = _inventory_state(payload["assets"])
+            if state == last_state and time.monotonic() - last_report < report_interval:
+                continue
+            # A blocked request must not cause a queued observation to be
+            # retimestamped and advertised as a newly observed process state.
+            observed = datetime.fromisoformat(payload["observed_at"])
+            if (datetime.now(timezone.utc) - observed).total_seconds() > min(report_interval, 900):
+                continue
+            try:
+                if not self.config.get("device_token"):
+                    self.enroll()
+                result = self._request("/api/v1/reports", payload, self.config["device_token"])
+                last_state, last_report = state, time.monotonic()
+                backoff = 5
+                print(f"inventory accepted: {result.get('asset_count', 0)} assets", flush=True)
+            except Exception as exc:
+                print(f"inventory upload failed: {type(exc).__name__}", flush=True)
+                stop.wait(backoff)
                 backoff = min(backoff * 2, report_interval)
+
+    def _upload_runtime(self, stop: threading.Event, poll_interval: int) -> None:
+        backoff = 5
+        while not stop.is_set():
+            if not self.config.get("device_token"):
+                stop.wait(1)
+                continue
+            try:
+                self.flush_runtime_events()
+                backoff = 5
+                stop.wait(poll_interval)
+            except Exception as exc:
+                print(f"runtime upload failed: {type(exc).__name__}", flush=True)
+                stop.wait(backoff)
+                backoff = min(backoff * 2, 300)
 
 
 def _inventory_state(assets: list[Any]) -> str:

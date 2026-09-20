@@ -16,6 +16,10 @@ Static evidence is cached in memory. Between full reconciliations, EdgeDisco che
 
 Every process poll produces a normalized state digest. The agent uploads a complete snapshot immediately when this state changes. If it does not change, runtime-hook events are still flushed and inventory waits for the heartbeat. Complete snapshots are intentional: the server uses absence from a fresh report to mark a previously running asset stopped.
 
+Collection, inventory upload, and runtime-spool upload run independently. The collector keeps only the newest complete snapshot in a one-slot queue; network requests and retry backoff do not delay the next process poll. Only successful inventory acknowledgements advance the change/heartbeat state. Queued observations retain their original timestamp and expire after the shorter of the heartbeat interval or 15 minutes. Runtime uploads have their own retry loop and durable spool. Collection itself remains synchronous, so an expensive static refresh can still lengthen a poll.
+
+If process enumeration fails or returns malformed output, the collector skips the report instead of advertising an empty process set. Existing server inventory expires naturally; a source failure must not masquerade as confirmed process termination.
+
 Example tuning for a more responsive endpoint:
 
 ```json
