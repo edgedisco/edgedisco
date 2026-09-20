@@ -111,9 +111,9 @@ bash install.sh
 
 Reinstall validates `agent.json` before replacing the package. Invalid JSON, invalid settings, or a configuration/database version newer than this release stops the upgrade. Repair the existing file or use a compatible release; reinstall does not silently discard it.
 
-Unversioned configuration is migrated to `config_version: 1`, preserving custom settings and adding missing defaults. The local server URL follows the configured port. Missing or rejected device credentials are re-enrolled with the local enrollment credential; timeouts and server errors do not trigger re-enrollment. Old EdgeDisco hook commands are replaced when paths change, while unrelated hooks remain intact.
+Unversioned and version-1 configuration is migrated to `config_version: 2`, preserving custom settings and adding missing incremental-scanning defaults. The local server URL follows the configured port. Missing or rejected device credentials are re-enrolled with the local enrollment credential; timeouts and server errors do not trigger re-enrollment. Old EdgeDisco hook commands are replaced when paths change, while unrelated hooks remain intact.
 
-The installer prints a protected snapshot directory under `~/.edgedisco/backups/`. Each snapshot includes the previous managed environment, configuration, database, hook files, launch definitions, and shell profiles. Services are stopped before package replacement. If installation fails, the installer restores the snapshot and restarts the prior service definitions. Failed-attempt files and database evidence remain under the snapshot's `failed-state/`; runtime spool files are never rolled back. A failed stop prevents file replacement.
+The installer prints a protected snapshot directory under `~/.edgedisco/backups/`. Each snapshot includes the previous managed environment, configuration, database, hook files, launch definitions, and shell profiles. Services are stopped before taking the snapshot, not just before package replacement. If installation fails, the installer restores the snapshot and reconciles evidence accepted during setup verification into the restored database before restarting prior services. This includes runtime events already acknowledged and removed from the spool, and supported OTLP outbox state. Fields absent from the old schema remain available in the full failed-attempt database under `failed-state/`. Runtime spool files are never rolled back. A failed stop prevents file replacement.
 
 Snapshots are retained and include credentials and evidence; keep them private. They consume space roughly proportional to the managed environment and database. If automatic recovery cannot finish, the installer reports the snapshot path. From a compatible source checkout, retry recovery with:
 
@@ -122,6 +122,22 @@ PYTHONPATH=src python3 -m ai_asset_inventory.upgrade restore --backup /absolute/
 ```
 
 Database migrations and `PRAGMA user_version` commit in one transaction. This release migrates existing databases to version 2 for binary fingerprint evidence while preserving prior rows. Future schema changes must supply explicit migration steps. These backup/rollback guarantees apply to `install.sh`; running `edgedisco setup` directly does not snapshot the package.
+
+## Final installed-system test
+
+Do not switch an existing quick-installer installation to an editable developer setup just to test an upgrade. Run isolated regressions (`make check`) first; installer fixtures use real package installation and HTTP services but simulate `launchctl`, so they do not certify real LaunchAgent operation.
+
+From the source checkout containing the changes to test:
+
+```bash
+bash ./install.sh --yes --no-open
+edgedisco status
+edgedisco demo
+```
+
+The local installer installs this checkout into the managed venv and upgrades the existing configuration. The downloaded installer instead tests published `main`; it cannot test unpushed changes. Honor a custom `EDGEDISCO_HOME` if the existing installation uses one. Do not uninstall, purge, or replace the current configuration for this test.
+
+Verify preserved device identity/custom settings, config version 2, healthy server and agent services, authenticated demo dashboard access, and fresh inventory. Start and stop an actual supported agent and refresh the dashboard after a polling interval. Finally start a fresh session in a hooked application and confirm new runtime events and session state. Synthetic demo or SDK events test transport, not native application hook invocation. No Full Disk Access, Accessibility, or Screen Recording permission should be required; stop and investigate unexpected prompts rather than granting them.
 
 ## Uninstall
 

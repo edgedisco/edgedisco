@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def _copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def snapshot(root: Path, home: Path) -> Path:
+def snapshot(root: Path, home: Path, *, quiesce: bool = False) -> Path:
     root, home = root.resolve(), home.resolve()
     if root == home or root in home.parents or root in {Path("/tmp"), Path("/private/tmp")}:
         raise RuntimeError("Installation root must be a dedicated EdgeDisco directory")
@@ -63,14 +64,21 @@ def snapshot(root: Path, home: Path) -> Path:
     backup.mkdir(parents=True, mode=0o700)
     backup.parent.chmod(0o700)
     present = []
-    for key, path in targets(root, home).items():
-        if path.exists() or path.is_symlink():
-            _copy(path, backup / "before" / key)
-            present.append(key)
-    manifest = {"root": str(root), "home": str(home), "present": present}
-    descriptor = os.open(backup / "manifest.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
-        json.dump(manifest, stream)
+    try:
+        if quiesce:
+            stop_services(root)
+        for key, path in targets(root, home).items():
+            if path.exists() or path.is_symlink():
+                _copy(path, backup / "before" / key)
+                present.append(key)
+        manifest = {"root": str(root), "home": str(home), "present": present}
+        descriptor = os.open(backup / "manifest.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(manifest, stream)
+    except Exception:
+        if quiesce:
+            start_services(home)
+        raise
     return backup
 
 
@@ -132,10 +140,51 @@ def restore(backup: Path) -> None:
                     shutil.move(str(sidecar), str(destination))
         if key in manifest["present"]:
             _copy(backup / "before" / key, target)
+    # Setup verification may have accepted reports and drained their spool.
+    # Project that evidence into the old schema before restarting old code.
+    failed_db = failed / "data/inventory.db"
+    restored_db = root / "data/inventory.db"
+    if failed_db.exists() and restored_db.exists():
+        _preserve_evidence(failed_db, restored_db)
     start_services(home)
     if (home / "Library/LaunchAgents" / f"{SERVER_LABEL}.plist").exists():
         values = _parse_env(root / "server.env")
         _wait_for_server(int(values.get("EDGEDISCO_PORT", "8080")), values["AAI_ADMIN_TOKEN"])
+
+
+def _preserve_evidence(source: Path, destination: Path) -> None:
+    """Retain accepted evidence using columns supported by the rollback schema.
+
+    Never copy schema/version or credentials over restored endpoint config.
+    The full newer database remains in failed-state for fields absent in the
+    old schema. Repeating rollback remains idempotent through primary keys.
+    """
+    with closing(sqlite3.connect(destination)) as conn, conn:
+        conn.execute("ATTACH DATABASE ? AS accepted", (str(source),))
+        conn.execute("BEGIN IMMEDIATE")
+        for table in ("devices", "scans", "assets", "runtime_events", "agent_sessions",
+                      "otlp_outbox", "otlp_asset_state"):
+            old = conn.execute(f"PRAGMA main.table_info({table})").fetchall()
+            new = conn.execute(f"PRAGMA accepted.table_info({table})").fetchall()
+            if not old or not new:
+                continue
+            names = {row[1] for row in new}
+            columns = [row[1] for row in old if row[1] in names]
+            fields = ','.join('"' + col + '"' for col in columns)
+            if table in {"assets", "agent_sessions", "otlp_outbox", "otlp_asset_state"}:
+                keys = [row[1] for row in old if row[5]]
+                updates = ','.join(f'"{col}"=excluded."{col}"' for col in columns if col not in keys)
+                conflict = ','.join('"' + col + '"' for col in keys)
+                sql = (f'INSERT INTO main.{table} ({fields}) SELECT {fields} FROM accepted.{table} WHERE true '
+                       f'ON CONFLICT ({conflict}) DO UPDATE SET {updates}')
+                if table != "otlp_outbox":
+                    clock = "updated_at" if table == "otlp_asset_state" else "last_seen"
+                    sql += f' WHERE excluded.{clock} >= {table}.{clock}'
+            else:
+                sql = f'INSERT OR IGNORE INTO main.{table} ({fields}) SELECT {fields} FROM accepted.{table}'
+            conn.execute(sql)
+        if conn.execute("PRAGMA main.foreign_key_check").fetchone():
+            raise RuntimeError("Cannot reconcile accepted evidence into rollback database")
 
 
 def main() -> None:
@@ -145,7 +194,7 @@ def main() -> None:
     parser.add_argument("--backup", type=Path)
     args = parser.parse_args()
     if args.action == "snapshot":
-        print(snapshot(args.root, Path.home()))
+        print(snapshot(args.root, Path.home(), quiesce=True))
     elif args.action == "stop":
         stop_services(args.root)
     else:

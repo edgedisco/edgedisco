@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 
 def load_config(path: Path) -> dict:
@@ -42,9 +42,11 @@ def migrate_config(config: dict, *, server_url: str, spool: Path) -> dict:
     # survive migrations; future field renames belong in explicit version steps.
     if migrated.get("config_version", 0) == 0:
         migrated.setdefault("scan_interval_seconds", 300)
-        migrated.setdefault("process_poll_interval_seconds", 60)
-        migrated.setdefault("static_scan_interval_seconds", 900)
         migrated.setdefault("runtime_spool", str(spool))
         migrated["config_version"] = 1
+    if migrated.get("config_version") == 1:
+        migrated.setdefault("process_poll_interval_seconds", 60)
+        migrated.setdefault("static_scan_interval_seconds", 900)
+        migrated["config_version"] = 2
     migrated["server_url"] = server_url
     return migrated

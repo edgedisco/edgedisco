@@ -123,7 +123,7 @@ fi
 UPGRADE_BACKUP="$(PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade snapshot --root "$INSTALL_ROOT")"
 echo "Installation backup: $UPGRADE_BACKUP"
 UPGRADE_STARTED=true
-PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade stop --root "$INSTALL_ROOT"
+# The snapshot command has already quiesced services before capturing the DB.
 VENV_PYTHON="$INSTALL_ROOT/venv/bin/python"
 if [[ ! -x "$VENV_PYTHON" ]]; then
   "$BASE_PYTHON" -m venv --without-pip "$INSTALL_ROOT/venv"

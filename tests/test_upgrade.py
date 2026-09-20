@@ -6,10 +6,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ai_asset_inventory.configuration import load_config, migrate_config
-from ai_asset_inventory.database import Database, DATABASE_VERSION
+from ai_asset_inventory.database import Database, DATABASE_VERSION, utc_now
 from ai_asset_inventory.self_service import default_layout, setup_macos
 from ai_asset_inventory.upgrade import snapshot, restore
 from ai_asset_inventory.adapters import install_cursor, install_claude, install_copilot
+from ai_asset_inventory.runtime import normalize_hook_event
 
 
 class UpgradeTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class UpgradeTests(unittest.TestCase):
         migrated = migrate_config(load_config(path), server_url="http://127.0.0.1:9000", spool=self.root / "events")
         for key, value in config.items():
             self.assertEqual(migrated[key], value)
-        self.assertEqual(migrated["config_version"], 1)
+        self.assertEqual(migrated["config_version"], 2)
         self.assertEqual(migrated["process_poll_interval_seconds"], 60)
         self.assertEqual(migrated["static_scan_interval_seconds"], 900)
         self.assertEqual(migrate_config(migrated, server_url=migrated["server_url"], spool=self.root / "other"), migrated)
@@ -43,6 +44,26 @@ class UpgradeTests(unittest.TestCase):
                 path.write_text(json.dumps({field: value}))
                 with self.assertRaisesRegex(RuntimeError, field):
                     load_config(path)
+
+    def test_version_one_config_gets_new_defaults_without_overwriting_custom_values(self):
+        old = {"config_version": 1, "process_poll_interval_seconds": 30, "device_token": "keep"}
+        result = migrate_config(old, server_url="http://127.0.0.1:8080", spool=self.root / "spool")
+        self.assertEqual(result["config_version"], 2)
+        self.assertEqual(result["process_poll_interval_seconds"], 30)
+        self.assertEqual(result["static_scan_interval_seconds"], 900)
+        self.assertEqual(result["device_token"], "keep")
+
+    @patch("ai_asset_inventory.upgrade.start_services")
+    @patch("ai_asset_inventory.upgrade.stop_services")
+    def test_snapshot_quiesces_before_copy_and_restarts_on_failure(self, stop, start):
+        (self.root / "agent.json").write_text('{}')
+        def failed_copy(*args):
+            stop.assert_called_once_with(self.root.resolve())
+            raise OSError("disk full")
+        with patch("ai_asset_inventory.upgrade._copy", side_effect=failed_copy):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                snapshot(self.root, self.home, quiesce=True)
+        start.assert_called_once_with(self.home.resolve())
 
     def test_changed_hook_paths_replace_managed_commands(self):
         for installer in (install_cursor, install_claude, install_copilot):
@@ -138,6 +159,27 @@ class UpgradeTests(unittest.TestCase):
 
     @patch("ai_asset_inventory.upgrade.start_services")
     @patch("ai_asset_inventory.upgrade.stop_services")
+    def test_rollback_keeps_new_evidence_without_upgrading_old_schema(self, stop, start):
+        db = Database(self.root / 'data/inventory.db')
+        device, _ = db.enroll({'hostname': 'old', 'os': 'Linux'})
+        with db.connect() as conn:
+            for column in ('binary_sha256', 'binary_fingerprint_status', 'fingerprint_library_version'):
+                conn.execute(f'ALTER TABLE assets DROP COLUMN {column}')
+            conn.execute('PRAGMA user_version=1')
+        backup = snapshot(self.root, self.home)
+        db = Database(db.path, otlp_enabled=True)
+        db.ingest(device, {'scan_id':'new', 'observed_at':utc_now(), 'assets':[
+            {'fingerprint':'a'*64, 'kind':'process', 'name':'Ollama', 'vendor':'Ollama',
+             'running':True, 'metadata':{}}]})
+        restore(backup)
+        with db.connect() as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM assets').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM scans').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM otlp_outbox').fetchone()[0], 1)
+            self.assertNotIn('binary_sha256', {row[1] for row in conn.execute('PRAGMA table_info(assets)')})
+    @patch("ai_asset_inventory.upgrade.start_services")
+    @patch("ai_asset_inventory.upgrade.stop_services")
     def test_snapshot_restores_package_config_and_database_without_losing_spool(self, stop, start):
         config = self.root / "agent.json"
         config.write_text(json.dumps({"device_token": "old-token", "custom": True}))
@@ -145,7 +187,7 @@ class UpgradeTests(unittest.TestCase):
         package.parent.mkdir()
         package.write_text("old package")
         db = Database(self.root / "data/inventory.db")
-        _, token = db.enroll({"hostname": "old", "os": "Linux"})
+        device, token = db.enroll({"hostname": "old", "os": "Linux"})
         hook = self.home / ".cursor/hooks.json"
         hook.parent.mkdir()
         hook.write_text('{"hooks": {"custom": []}}')
@@ -155,6 +197,8 @@ class UpgradeTests(unittest.TestCase):
         config.write_text('{"custom": false}')
         hook.write_text("broken hook")
         db.enroll({"hostname": "failed-attempt", "os": "Linux"})
+        accepted = normalize_hook_event("sdk", "sessionStart", {"session_id": "accepted-during-upgrade"})
+        db.ingest_runtime_events(device, [accepted])
         spool = self.root / "runtime-events.jsonl"
         spool.write_text("new events must survive")
         restore(backup)
@@ -163,7 +207,10 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn("custom", hook.read_text())
         self.assertEqual(spool.read_text(), "new events must survive")
         self.assertIsNotNone(Database(db.path).device_for_token(token))
-        self.assertEqual(Database(db.path).summary()["devices"], 1)
+        self.assertEqual(Database(db.path).summary()["devices"], 2)
+        with Database(db.path).connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM runtime_events WHERE id=?", (accepted["event_id"],)).fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0], 1)
         self.assertEqual(Database(backup / "failed-state/data/inventory.db").summary()["devices"], 2)
         stop.assert_called_once_with(self.root.resolve())
         start.assert_called_once_with(self.home.resolve())
