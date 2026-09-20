@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -14,7 +15,8 @@ from pathlib import Path
 
 from .configuration import load_config
 from .database import DATABASE_VERSION
-from .self_service import AGENT_LABEL, SERVER_LABEL, _health, _launchctl, _parse_env, _wait_for_server
+from .self_service import (AGENT_LABEL, SERVER_LABEL, _health, _launchctl, _parse_env,
+                           _systemctl, _wait_for_server)
 
 
 def targets(root: Path, home: Path) -> dict[str, Path]:
@@ -26,6 +28,8 @@ def targets(root: Path, home: Path) -> dict[str, Path]:
         result["home/" + relative] = home / relative
     for label in (SERVER_LABEL, AGENT_LABEL):
         relative = f"Library/LaunchAgents/{label}.plist"
+        result["home/" + relative] = home / relative
+        relative = f".config/systemd/user/{label}.service"
         result["home/" + relative] = home / relative
     return result
 
@@ -83,9 +87,13 @@ def snapshot(root: Path, home: Path, *, quiesce: bool = False) -> Path:
 
 
 def stop_services(root: Path) -> None:
-    domain = f"gui/{os.getuid()}"
-    for label in (AGENT_LABEL, SERVER_LABEL):
-        _launchctl("bootout", f"{domain}/{label}", check=False)
+    if platform.system() == "Linux":
+        for label in (AGENT_LABEL, SERVER_LABEL):
+            _systemctl("stop", f"{label}.service", check=False)
+    else:
+        domain = f"gui/{os.getuid()}"
+        for label in (AGENT_LABEL, SERVER_LABEL):
+            _launchctl("bootout", f"{domain}/{label}", check=False)
     if not (root / "server.env").exists():
         return
     port = int(_parse_env(root / "server.env").get("EDGEDISCO_PORT", "8080"))
@@ -97,6 +105,13 @@ def stop_services(root: Path) -> None:
 
 
 def start_services(home: Path) -> None:
+    if platform.system() == "Linux":
+        _systemctl("daemon-reload")
+        for label in (SERVER_LABEL, AGENT_LABEL):
+            unit = home / ".config/systemd/user" / f"{label}.service"
+            if unit.exists():
+                _systemctl("enable", "--now", f"{label}.service")
+        return
     domain = f"gui/{os.getuid()}"
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
@@ -147,7 +162,9 @@ def restore(backup: Path) -> None:
     if failed_db.exists() and restored_db.exists():
         _preserve_evidence(failed_db, restored_db)
     start_services(home)
-    if (home / "Library/LaunchAgents" / f"{SERVER_LABEL}.plist").exists():
+    server_definition = ((home / "Library/LaunchAgents" / f"{SERVER_LABEL}.plist").exists() or
+                         (home / ".config/systemd/user" / f"{SERVER_LABEL}.service").exists())
+    if server_definition:
         values = _parse_env(root / "server.env")
         _wait_for_server(int(values.get("EDGEDISCO_PORT", "8080")), values["AAI_ADMIN_TOKEN"])
 

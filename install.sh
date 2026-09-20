@@ -15,7 +15,7 @@ usage() {
   cat <<'EOF'
 Usage: bash install.sh [options]
 
-Install or upgrade the per-user EdgeDisco service on macOS.
+Install or upgrade the per-user EdgeDisco service on macOS or systemd Linux.
 When run from a source checkout, installs that checkout. When run through
 stdin or outside a checkout, downloads the configured source archive.
 
@@ -30,6 +30,9 @@ Environment overrides:
   EDGEDISCO_HOME         Installation root (default: ~/.edgedisco).
   PYTHON_BIN             Python 3.9+ interpreter command (default: python3).
   EDGEDISCO_ARCHIVE_URL  Source archive used by remote/stdin installation.
+
+Linux support requires systemd, systemctl, and an active systemd user session.
+Containers, WSL without systemd, and non-systemd desktops use manual deployment.
 
 Examples:
   bash install.sh
@@ -88,9 +91,25 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "The self-service installer currently supports macOS." >&2
+SYSTEM_NAME="$(uname -s)"
+if [[ "$SYSTEM_NAME" != "Darwin" && "$SYSTEM_NAME" != "Linux" ]]; then
+  echo "The self-service installer supports macOS and systemd-based Linux." >&2
   exit 1
+fi
+if [[ "$SYSTEM_NAME" == "Linux" ]]; then
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "Linux self-service installation must run as the target non-root user, not with sudo." >&2
+    exit 1
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "Linux self-service installation requires systemd and systemctl." >&2
+    exit 1
+  fi
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    echo "Linux self-service installation requires an active systemd user session." >&2
+    echo "Containers, WSL without systemd, and non-systemd desktops must use manual deployment." >&2
+    exit 1
+  fi
 fi
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python 3.9 or newer is required." >&2
@@ -120,7 +139,7 @@ EdgeDisco will:
   - install under ~/.edgedisco
   - inventory supported AI applications and local agent runtimes
   - install metadata-only hooks for detected Cursor, Claude Code, and Copilot apps
-  - start local background services that survive reboot
+  - start per-user background services that survive login sessions
 
 It does not collect prompts, responses, source code, tool arguments, credentials,
 screenshots, browser history, or raw command lines.

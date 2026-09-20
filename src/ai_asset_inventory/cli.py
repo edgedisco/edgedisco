@@ -10,7 +10,7 @@ from .server import serve
 from .runtime import MAX_HOOK_INPUT_BYTES, RuntimeClient
 from .adapters import install_adapters
 from .demo import run_demo
-from .self_service import open_dashboard, setup_macos, status as self_service_status, uninstall_macos
+from .self_service import open_dashboard, setup_self_service, status as self_service_status, uninstall_self_service
 
 
 def parser() -> argparse.ArgumentParser:
@@ -39,7 +39,7 @@ def parser() -> argparse.ArgumentParser:
     install = adapter_sub.add_parser("install")
     install.add_argument("--config", type=Path, required=True)
     install.add_argument("--apps", nargs="+", choices=["cursor", "claude-code", "github-copilot"], required=True)
-    setup = sub.add_parser("setup", help="one-command macOS setup")
+    setup = sub.add_parser("setup", help="one-command macOS or systemd Linux setup")
     setup.add_argument("--root", type=Path)
     setup.add_argument("--port", type=int)
     setup.add_argument("--all-adapters", action="store_true")
@@ -48,7 +48,7 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("--root", type=Path)
     dashboard = sub.add_parser("dashboard", help="open the authenticated local dashboard")
     dashboard.add_argument("--root", type=Path)
-    uninstall = sub.add_parser("uninstall", help="remove macOS background services")
+    uninstall = sub.add_parser("uninstall", help="remove self-service background services")
     uninstall.add_argument("--root", type=Path)
     uninstall.add_argument("--purge", action="store_true", help="also delete local data")
     uninstall.add_argument("--yes", action="store_true", help="confirm data deletion")
@@ -89,7 +89,7 @@ def main() -> None:
             print(f"installed: {path}")
         return
     if args.command == "setup":
-        result = setup_macos(
+        result = setup_self_service(
             root=args.root, port=args.port, all_adapters=args.all_adapters,
             open_dashboard=not args.no_open,
         )
@@ -110,7 +110,7 @@ def main() -> None:
         print(f"Dashboard: {open_dashboard(args.root)}")
         return
     if args.command == "uninstall":
-        result = uninstall_macos(
+        result = uninstall_self_service(
             root=args.root, purge=args.purge, assume_yes=args.yes,
         )
         print("EdgeDisco background services removed")

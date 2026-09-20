@@ -20,18 +20,21 @@ from ai_asset_inventory.self_service import (
     install_cli_launcher,
     open_dashboard,
     ensure_local_server,
+    setup_linux,
     setup_macos,
     _restart_service,
     _verify_browser_bootstrap,
     _health,
     uninstall_cli_launcher,
     uninstall_macos,
+    uninstall_linux,
+    write_systemd_units,
     write_launch_agents,
 )
 
 
 class CliPrivacyTests(unittest.TestCase):
-    @patch("ai_asset_inventory.cli.setup_macos")
+    @patch("ai_asset_inventory.cli.setup_self_service")
     def test_setup_does_not_print_admin_token(self, setup):
         from ai_asset_inventory.cli import main
         setup.return_value = {
@@ -59,6 +62,64 @@ class FakeAgentClient:
 
 
 class SelfServiceTests(unittest.TestCase):
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Linux")
+    @patch("ai_asset_inventory.self_service.require_systemd_user")
+    @patch("ai_asset_inventory.self_service._health", return_value=None)
+    @patch("ai_asset_inventory.self_service._restart_systemd_service")
+    @patch("ai_asset_inventory.self_service._wait_for_server")
+    @patch("ai_asset_inventory.self_service._verify_browser_bootstrap")
+    @patch("ai_asset_inventory.self_service.install_adapters", return_value=[])
+    @patch("ai_asset_inventory.self_service.detect_adapters", return_value=[])
+    @patch("ai_asset_inventory.self_service.AgentClient", FakeAgentClient)
+    def test_linux_setup_writes_and_starts_user_services(
+        self, _detect, _install, verify, _wait, restart, _health, required, _system
+    ):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            root = home / ".edgedisco"
+            result = setup_linux(root=root, home=home, open_dashboard=False)
+            required.assert_called_once_with()
+            self.assertTrue((home / ".config/systemd/user/com.edgedisco.server.service").exists())
+            self.assertTrue((home / ".config/systemd/user/com.edgedisco.agent.service").exists())
+            self.assertEqual(restart.call_args_list[0].args, ("com.edgedisco.server.service",))
+            self.assertEqual(restart.call_args_list[1].args, ("com.edgedisco.agent.service",))
+            verify.assert_called_once()
+            self.assertEqual(result["asset_count"], 4)
+            self.assertTrue(Path(result["cli"]).is_symlink())
+
+    def test_linux_systemd_units_are_per_user_and_unprivileged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = default_layout(home / ".edgedisco", home)
+            cli = layout.venv / "bin/edgedisco"
+            cli.parent.mkdir(parents=True)
+            cli.write_text("#!/bin/sh\n")
+            ensure_credentials(layout, 8765)
+            server, agent = write_systemd_units(layout, 8765)
+            self.assertEqual(server.parent, home / ".config/systemd/user")
+            self.assertIn("NoNewPrivileges=true", server.read_text())
+            self.assertIn("ProtectSystem=strict", server.read_text())
+            self.assertIn("ReadWritePaths=", agent.read_text())
+            self.assertIn("127.0.0.1 --port 8765", (layout.bin / "run-server.sh").read_text())
+            self.assertIn("Requires=com.edgedisco.server.service", agent.read_text())
+            self.assertNotIn("User=root", server.read_text() + agent.read_text())
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Linux")
+    @patch("ai_asset_inventory.self_service._systemctl")
+    def test_linux_uninstall_disables_user_units_and_preserves_data(self, systemctl, _system):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = default_layout(home / ".edgedisco", home)
+            layout.root.mkdir()
+            layout.systemd_user.mkdir(parents=True)
+            for label in (SERVER_LABEL, AGENT_LABEL):
+                (layout.systemd_user / f"{label}.service").write_text("unit")
+            result = uninstall_linux(root=layout.root, home=home)
+            self.assertFalse(any(layout.systemd_user.glob("com.edgedisco.*.service")))
+            self.assertTrue(layout.root.exists())
+            self.assertFalse(result["data_purged"])
+            self.assertEqual(systemctl.call_count, 3)
+
     @patch("ai_asset_inventory.self_service._verify_browser_bootstrap")
     @patch("ai_asset_inventory.self_service._health", return_value={"assets": 1})
     def test_dashboard_opens_fresh_authenticated_session_without_exposing_token(self, _health, bootstrap):

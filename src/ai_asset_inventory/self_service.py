@@ -44,11 +44,12 @@ class Layout:
     logs: Path
     bin: Path
     launch_agents: Path
+    systemd_user: Path
 
 
 @dataclass(frozen=True)
 class CliLauncher:
-    """Public ``edgedisco`` entrypoint created by macOS self-service setup."""
+    """Public ``edgedisco`` entrypoint created by self-service setup."""
 
     managed: Path
     public: Path
@@ -68,6 +69,7 @@ def default_layout(root: Path | None = None, home: Path | None = None) -> Layout
         logs=root / "logs",
         bin=root / "bin",
         launch_agents=home / "Library/LaunchAgents",
+        systemd_user=home / ".config/systemd/user",
     )
 
 
@@ -198,7 +200,7 @@ def _remove_path_block(profile: Path) -> bool:
 
 
 def install_cli_launcher(layout: Layout, home: Path | None = None) -> CliLauncher:
-    """Install a stable public ``edgedisco`` command for normal macOS shells."""
+    """Install a stable public ``edgedisco`` command for normal user shells."""
     home = home or Path.home()
     managed = _write_managed_launcher(layout)
     public_dir, needs_path = select_public_bin_dir(home)
@@ -339,6 +341,76 @@ def write_launch_agents(layout: Layout, port: int) -> tuple[Path, Path]:
     return server_plist, agent_plist
 
 
+def _systemd_quote(path: Path) -> str:
+    rendered = str(path)
+    if "\n" in rendered or "\r" in rendered:
+        raise RuntimeError("service paths cannot contain newlines")
+    return '"' + rendered.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
+def write_systemd_units(layout: Layout, port: int) -> tuple[Path, Path]:
+    """Write unprivileged user services for systemd-based Linux desktops."""
+    cli = _cli_executable(layout)
+    server_runner = layout.bin / "run-server.sh"
+    _atomic_write(server_runner, (
+        "#!/bin/sh\nset -a\n"
+        f". {shlex.quote(str(layout.env))}\nset +a\n"
+        f"exec {shlex.quote(str(cli))} server --host 127.0.0.1 --port {port} "
+        f"--db {shlex.quote(str(layout.database))}\n"
+    ), 0o700)
+    common = ("Restart=always\nRestartSec=15\nNoNewPrivileges=true\nPrivateTmp=true\n"
+              f"ProtectSystem=strict\nReadWritePaths={_systemd_quote(layout.root)}\n")
+    server = layout.systemd_user / f"{SERVER_LABEL}.service"
+    agent = layout.systemd_user / f"{AGENT_LABEL}.service"
+    _atomic_write(server, (
+        "[Unit]\nDescription=EdgeDisco local inventory server\nAfter=network-online.target\n\n"
+        f"[Service]\nType=simple\nExecStart={_systemd_quote(server_runner)}\n{common}\n"
+        "[Install]\nWantedBy=default.target\n"
+    ))
+    _atomic_write(agent, (
+        "[Unit]\nDescription=EdgeDisco endpoint collector for the logged-in user\n"
+        f"After=network-online.target {SERVER_LABEL}.service\nRequires={SERVER_LABEL}.service\n\n"
+        f"[Service]\nType=simple\nExecStart={_systemd_quote(cli)} agent run --config {_systemd_quote(layout.config)}\n{common}\n"
+        "[Install]\nWantedBy=default.target\n"
+    ))
+    return server, agent
+
+
+def _systemctl(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+        environment.pop(key, None)
+    return subprocess.run(["systemctl", "--user", *arguments], env=environment,
+                          capture_output=True, text=True, check=check)
+
+
+def require_systemd_user() -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        raise RuntimeError("Linux self-service setup must run as the target non-root user")
+    if shutil.which("systemctl") is None:
+        raise RuntimeError("Linux self-service installation requires systemd and systemctl")
+    result = _systemctl("show-environment", check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Linux self-service installation requires an active systemd user session; "
+            "containers, WSL without systemd, and non-systemd desktops must use manual deployment"
+        )
+
+
+def _restart_systemd_service(name: str, *, wait_for_port: int | None = None) -> None:
+    _systemctl("stop", name, check=False)
+    if wait_for_port is not None:
+        deadline = time.monotonic() + 5
+        while _health(wait_for_port) is not None:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("a stale server is still running after systemd stop")
+            time.sleep(0.2)
+    _systemctl("daemon-reload")
+    result = _systemctl("enable", "--now", name, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"could not start {name}: {result.stderr.strip() or result.stdout.strip()}")
+
+
 def _launchctl(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["launchctl", *arguments], capture_output=True, text=True, check=check)
 
@@ -417,14 +489,57 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
                 all_adapters: bool = False, open_dashboard: bool = True,
                 home: Path | None = None) -> dict[str, Any]:
     if platform.system() != "Darwin":
-        raise RuntimeError("self-service setup currently supports macOS; use the manual deployment guide elsewhere")
+        raise RuntimeError("macOS setup requires Darwin")
     layout = default_layout(root, home)
+    return _setup_self_service(
+        layout, port, all_adapters, open_dashboard,
+        write_services=write_launch_agents,
+        restart_server=lambda existing, selected: _restart_service(
+            SERVER_LABEL, layout.launch_agents / f"{SERVER_LABEL}.plist",
+            wait_for_port=selected if existing else None,
+        ),
+        restart_agent=lambda: _restart_service(
+            AGENT_LABEL, layout.launch_agents / f"{AGENT_LABEL}.plist"
+        ),
+        home=home,
+    )
+
+
+def setup_linux(*, root: Path | None = None, port: int | None = None,
+                all_adapters: bool = False, open_dashboard: bool = True,
+                home: Path | None = None) -> dict[str, Any]:
+    if platform.system() != "Linux":
+        raise RuntimeError("Linux setup requires Linux")
+    require_systemd_user()
+    layout = default_layout(root, home)
+    return _setup_self_service(
+        layout, port, all_adapters, open_dashboard,
+        write_services=write_systemd_units,
+        restart_server=lambda existing, selected: _restart_systemd_service(
+            f"{SERVER_LABEL}.service", wait_for_port=selected if existing else None
+        ),
+        restart_agent=lambda: _restart_systemd_service(f"{AGENT_LABEL}.service"),
+        home=home,
+    )
+
+
+def setup_self_service(**kwargs: Any) -> dict[str, Any]:
+    if platform.system() == "Darwin":
+        return setup_macos(**kwargs)
+    if platform.system() == "Linux":
+        return setup_linux(**kwargs)
+    raise RuntimeError("self-service setup supports macOS and systemd-based Linux")
+
+
+def _setup_self_service(layout: Layout, port: int | None, all_adapters: bool,
+                        open_browser: bool, *, write_services, restart_server,
+                        restart_agent, home: Path | None) -> dict[str, Any]:
     current = load_config(layout.config)
     layout.database.parent.mkdir(parents=True, exist_ok=True)
     layout.logs.mkdir(parents=True, exist_ok=True)
     values = ensure_credentials(layout, port)
     selected_port = int(values["EDGEDISCO_PORT"])
-    server_plist, agent_plist = write_launch_agents(layout, selected_port)
+    write_services(layout, selected_port)
 
     existing = _health(selected_port)
     authorized = _health(selected_port, values["AAI_ADMIN_TOKEN"]) if existing else None
@@ -433,7 +548,7 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
             f"port {selected_port} is already used by a server with different credentials; "
             "stop it or rerun setup with --port another-port"
         )
-    _restart_service(SERVER_LABEL, server_plist, wait_for_port=selected_port if existing else None)
+    restart_server(existing is not None, selected_port)
     _wait_for_server(selected_port, values["AAI_ADMIN_TOKEN"])
     _verify_browser_bootstrap(selected_port, values["AAI_ADMIN_TOKEN"])
 
@@ -465,10 +580,10 @@ def setup_macos(*, root: Path | None = None, port: int | None = None,
         client = AgentClient(layout.config)
         client.enroll()
         report = client.send_once()
-    _restart_service(AGENT_LABEL, agent_plist)
+    restart_agent()
     launcher = install_cli_launcher(layout, home)
     dashboard = f"http://127.0.0.1:{selected_port}"
-    if open_dashboard:
+    if open_browser:
         # Mint immediately before opening: setup may outlive the 60-second code.
         webbrowser.open(_verify_browser_bootstrap(selected_port, values["AAI_ADMIN_TOKEN"]))
     return {
@@ -545,7 +660,7 @@ def ensure_local_server(
     home: Path | None = None,
     start_if_needed: bool = True,
 ) -> LocalServer:
-    """Reuse a healthy local server or start one through the supported macOS path."""
+    """Reuse a healthy local server or start one through self-service setup."""
     home = home or Path.home()
     layout = default_layout(root, home)
     values = _parse_env(layout.env)
@@ -565,12 +680,7 @@ def ensure_local_server(
             f"EdgeDisco server is not available on http://127.0.0.1:{port}; "
             "start it with edgedisco setup or the self-service installer"
         )
-    if platform.system() != "Darwin":
-        raise RuntimeError(
-            "EdgeDisco server is not running. Start it first, or use the macOS "
-            "self-service installer / edgedisco setup."
-        )
-    setup_macos(root=layout.root, home=home, open_dashboard=False)
+    setup_self_service(root=layout.root, home=home, open_dashboard=False)
     values = _parse_env(layout.env)
     port = int(values["EDGEDISCO_PORT"])
     admin = values["AAI_ADMIN_TOKEN"]
@@ -617,3 +727,44 @@ def uninstall_macos(*, root: Path | None = None, purge: bool = False,
         "path_block_removed": launcher["path_block_removed"],
         "adapters_removed": [str(path) for path in removed_adapters],
     }
+
+
+def uninstall_linux(*, root: Path | None = None, purge: bool = False,
+                    assume_yes: bool = False, home: Path | None = None) -> dict[str, Any]:
+    if platform.system() != "Linux":
+        raise RuntimeError("Linux uninstall requires Linux")
+    layout = default_layout(root, home)
+    for label in (AGENT_LABEL, SERVER_LABEL):
+        _systemctl("disable", "--now", f"{label}.service", check=False)
+        (layout.systemd_user / f"{label}.service").unlink(missing_ok=True)
+    _systemctl("daemon-reload", check=False)
+    launcher = uninstall_cli_launcher(layout, home)
+    removed_adapters = uninstall_adapters(home)
+    purged = _purge_installation(layout, purge, assume_yes)
+    return {
+        "services_removed": True, "data_purged": purged, "root": str(layout.root),
+        "launcher_removed": launcher["removed"], "path_block_removed": launcher["path_block_removed"],
+        "adapters_removed": [str(path) for path in removed_adapters],
+    }
+
+
+def _purge_installation(layout: Layout, purge: bool, assume_yes: bool) -> bool:
+    if not purge:
+        return False
+    if layout.root.name != ".edgedisco":
+        raise RuntimeError(f"refusing to purge unexpected path: {layout.root}")
+    approved = assume_yes
+    if not approved:
+        approved = input("Delete all EdgeDisco credentials, logs, and evidence? [y/N] ").lower() == "y"
+    if approved and layout.root.exists():
+        shutil.rmtree(layout.root)
+        return True
+    return False
+
+
+def uninstall_self_service(**kwargs: Any) -> dict[str, Any]:
+    if platform.system() == "Darwin":
+        return uninstall_macos(**kwargs)
+    if platform.system() == "Linux":
+        return uninstall_linux(**kwargs)
+    raise RuntimeError("self-service uninstall supports macOS and systemd-based Linux")

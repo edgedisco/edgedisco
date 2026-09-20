@@ -59,6 +59,28 @@ class InstallerTests(unittest.TestCase):
             self.assertIn("Usage: bash install.sh [options]", result.stderr)
             self.assertFalse((home / ".edgedisco").exists())
 
+    def test_linux_requires_an_active_systemd_user_session_before_installing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            fake_bin = home / "bin"
+            fake_bin.mkdir()
+            for name, body in (
+                ("uname", "#!/bin/sh\necho Linux\n"),
+                ("systemctl", "#!/bin/sh\nexit 1\n"),
+            ):
+                path = fake_bin / name
+                path.write_text(body)
+                path.chmod(0o755)
+            result = subprocess.run(
+                ["/bin/bash", str(REPO / "install.sh"), "--yes", "--no-open"],
+                env=dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(home / ".edgedisco"),
+                         PATH=f"{fake_bin}:/usr/bin:/bin"),
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("active systemd user session", result.stderr)
+            self.assertFalse((home / ".edgedisco").exists())
+
     def test_remote_stdin_failure_is_immediate_and_does_not_create_launcher(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
