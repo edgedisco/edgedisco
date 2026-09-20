@@ -7,6 +7,12 @@ from unittest.mock import patch
 from ai_asset_inventory import detector
 
 
+HOMEBREW_FRAMEWORK_PYTHON = (
+    "/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/"
+    "Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+)
+
+
 class DetectorTests(unittest.TestCase):
     def test_process_detection_never_emits_command(self):
         with patch.object(detector, "_process_rows", return_value=[
@@ -45,6 +51,49 @@ class DetectorTests(unittest.TestCase):
         self.assertEqual(runtime.name, "LangGraph/LangChain")
         self.assertEqual(runtime.metadata["host_app"], "Cursor")
         self.assertEqual(runtime.metadata["instance_count"], 2)
+
+    def test_macos_truncated_homebrew_python_comm_classifies_agent_runtimes(self):
+        # macOS ``ps`` truncates long ``comm`` paths; the real Python.framework
+        # binary remains as the leading token of ``args``.
+        truncated_comm = "/opt/homebrew/Ce"
+        cases = [
+            ("crewai", ("CrewAI", "CrewAI")),
+            ("autogen", ("AutoGen", "Microsoft")),
+            ("langgraph", ("LangGraph/LangChain", "LangChain")),
+            ("langchain", ("LangGraph/LangChain", "LangChain")),
+            ("mcp-server", ("MCP Server", "Unknown")),
+        ]
+        for needle, expected in cases:
+            with self.subTest(needle=needle):
+                args_line = (
+                    f"{HOMEBREW_FRAMEWORK_PYTHON} "
+                    f"/Users/nick/.edgedisco-lab-debug/workload.py {needle}"
+                )
+                row = detector.ProcessObservation(73269, 1, truncated_comm, [args_line])
+                text = detector._process_classification_text(row)
+                self.assertIn(needle, text.lower())
+                self.assertEqual(detector._classify(text), expected)
+                with patch.object(detector, "_process_rows", return_value=[row]):
+                    assets = detector.scan_processes()
+                process_assets = [a for a in assets if a.kind == "process"]
+                self.assertEqual(len(process_assets), 1)
+                self.assertEqual(process_assets[0].name, expected[0])
+                serialized = json.dumps(process_assets[0].to_dict())
+                self.assertNotIn(args_line, serialized)
+                self.assertNotIn("workload.py", serialized)
+
+    def test_unrelated_process_with_ai_keyword_in_args_is_not_classified(self):
+        # Args are only consulted when the leading executable is a known generic
+        # runtime; an unrelated binary must not match via arbitrary argv text.
+        row = detector.ProcessObservation(
+            99,
+            1,
+            "/usr/bin/grep",
+            ["grep", "-n", "crewai", "/tmp/notes.txt"],
+        )
+        self.assertEqual(detector._process_classification_text(row), "/usr/bin/grep")
+        with patch.object(detector, "_process_rows", return_value=[row]):
+            self.assertEqual(detector.scan_processes(), [])
 
 
 if __name__ == "__main__":

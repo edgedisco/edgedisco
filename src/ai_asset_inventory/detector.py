@@ -144,15 +144,47 @@ def scan_processes() -> list[Asset]:
     return list(found.values())
 
 
+_GENERIC_RUNTIMES = {"python", "python3", "node", "node.exe", "npx", "npx.exe", "uvx", "docker"}
+_SHELL_NAMES = {"sh", "bash", "zsh", "fish", "cmd.exe", "powershell.exe", "pwsh.exe"}
+_VERSIONED_PYTHON = re.compile(r"^python\d+(\.\d+)*$")
+
+
+def _is_generic_runtime_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _GENERIC_RUNTIMES or bool(_VERSIONED_PYTHON.match(lowered))
+
+
+def _args_leading_executable_name(args: list[str]) -> str | None:
+    """Return the basename of the executable represented at the start of args.
+
+    On Unix, ``ps`` often stores the full command line as a single args entry.
+    Tests and some platforms may already provide discrete argv tokens.
+    """
+    if not args:
+        return None
+    first = args[0].strip().strip("\"'")
+    if not first:
+        return None
+    token = first.split(None, 1)[0].strip("\"'")
+    if not token:
+        return None
+    return Path(token).name
+
+
 def _process_classification_text(row: ProcessObservation) -> str:
     executable_name = Path(row.executable).name
-    generic_runtimes = {"python", "python3", "node", "node.exe", "npx", "npx.exe", "uvx", "docker"}
-    shell_names = {"sh", "bash", "zsh", "fish", "cmd.exe", "powershell.exe", "pwsh.exe"}
-    if executable_name.lower() in shell_names:
+    if executable_name.lower() in _SHELL_NAMES:
         return executable_name
-    if executable_name.lower() in generic_runtimes:
-        return f"{executable_name} {' '.join(row.args)}"
-    return row.executable
+    runtime_name = executable_name
+    if not _is_generic_runtime_name(executable_name):
+        # macOS truncates ``comm`` (e.g. Homebrew Python -> ``/opt/homebrew/Ce``).
+        # The real interpreter still appears as the leading token of ``args``.
+        leading = _args_leading_executable_name(row.args)
+        if leading and _is_generic_runtime_name(leading):
+            runtime_name = leading
+        else:
+            return row.executable
+    return f"{runtime_name} {' '.join(row.args)}"
 
 
 def _host_app(row: ProcessObservation, by_pid: dict[int, ProcessObservation], classifications: dict[int, tuple[str, str]]) -> str | None:
