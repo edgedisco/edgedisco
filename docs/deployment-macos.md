@@ -6,19 +6,19 @@ This guide runs the EdgeDisco server and collector on one Mac for evaluation. A 
 
 Requirements:
 
-- macOS 12 or newer
+- macOS 12 or newer (supported; the installer does not enforce the OS version)
 - Python 3.9 or newer
 - An internet connection for the initial install
 
 Download, inspect, and run the installer:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
 less install.sh
 bash install.sh
 ```
 
-The installer does not use `sudo`. It:
+The installer does not use `sudo` and does not request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring. It:
 
 1. Creates `~/.edgedisco/venv` and installs EdgeDisco there.
 2. Generates distinct administrator and enrollment credentials.
@@ -30,6 +30,8 @@ The installer does not use `sudo`. It:
 8. Opens the dashboard. The administrator token stays in the protected local configuration file.
 
 The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
+
+The collector stays inside `/Applications`, `~/Applications`, explicitly allowlisted executable directories, supported MCP configuration files, and current-user process metadata. It does not search Desktop, Documents, Downloads, iCloud Drive, network volumes, removable media, or other users' processes. Unreadable files are skipped without retrying with elevated privileges. macOS may show its normal Background Items notification when the per-user LaunchAgents are installed.
 
 Use another local port if 8080 is already assigned:
 
@@ -62,12 +64,13 @@ edgedisco demo
 
 The self-service installer installs a stable `edgedisco` command for normal shells. You do not need to activate a virtual environment or type the internal install path.
 
-The status output should show `Server: healthy` and `Endpoint: enrolled`. Open `http://127.0.0.1:8080` and sign in with:
+The status output should show `Server: healthy` and `Endpoint: enrolled`. Open `http://127.0.0.1:8080`. If manual sign-in is needed, copy the token without printing it:
 
 ```bash
-source ~/.edgedisco/server.env
-echo "$AAI_ADMIN_TOKEN"
+grep '^export AAI_ADMIN_TOKEN=' ~/.edgedisco/server.env | cut -d= -f2- | tr -d '\n' | pbcopy
 ```
+
+Paste with **Command+V** and do not place the administrator token in screenshots, logs, issues, or chat.
 
 Start an agent task in Cursor, Claude Code, or GitHub Copilot. Then wait for the collector cycle or send immediately:
 
@@ -102,7 +105,7 @@ tail -f ~/.edgedisco/logs/agent.err.log
 Download the current installer and run it again. Existing credentials, enrollment, and evidence are preserved.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
 bash install.sh
 ```
 
@@ -118,7 +121,7 @@ Snapshots are retained and include credentials and evidence; keep them private. 
 PYTHONPATH=src python3 -m ai_asset_inventory.upgrade restore --backup /absolute/path/to/.edgedisco/backups/TIMESTAMP
 ```
 
-Database migrations and `PRAGMA user_version` commit in one transaction. This release migrates the original unversioned schema to version 1; future schema changes must supply explicit migration steps. These backup/rollback guarantees apply to `install.sh`; running `edgedisco setup` directly does not snapshot the package.
+Database migrations and `PRAGMA user_version` commit in one transaction. This release migrates existing databases to version 2 for binary fingerprint evidence while preserving prior rows. Future schema changes must supply explicit migration steps. These backup/rollback guarantees apply to `install.sh`; running `edgedisco setup` directly does not snapshot the package.
 
 ## Uninstall
 
@@ -127,6 +130,8 @@ Stop and remove the background services while keeping the local data:
 ```bash
 edgedisco uninstall
 ```
+
+Uninstall also removes only the EdgeDisco-managed Cursor, Claude Code, and GitHub Copilot hooks. Unrelated application hooks are preserved.
 
 Delete the local credentials, logs, configuration, and evidence as well:
 
@@ -154,4 +159,4 @@ If no agent sessions appear:
 
 ## Managed enterprise rollout
 
-The self-service mode is intended for a local evaluation. For managed endpoints, host the API behind HTTPS, provision only endpoint configuration through MDM, use an appropriate service identity, define retention and access controls, and complete the [production hardening checklist](production-hardening.md). The example `deploy/com.trust3.ai-inventory.plist` can be adapted for that model.
+The self-service mode is intended for a local evaluation. For managed endpoints, host the API behind HTTPS, provision endpoint configuration through MDM, and run one per-user collector in each target user's graphical session. Do not convert it to a root LaunchDaemon: the scanner deliberately observes only its own user. Define retention and access controls and complete the [production hardening checklist](production-hardening.md). A future signed app distribution should use Apple's supported background-service APIs.

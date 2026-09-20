@@ -17,6 +17,8 @@ This project provides a focused inventory layer without collecting employee cont
 ## Capabilities
 
 - Discovers supported AI desktop applications and local model runtimes
+- Finds supported agent CLIs in a small allowlist of standard executable directories
+- Computes SHA-256 content fingerprints for readable binaries already found in safe install roots
 - Detects supported AI and agent processes while they are running
 - Links active agent runtimes to the desktop tool that spawned them using local process lineage
 - Captures agent sessions, subagents, tool use, MCP use, status, model, and duration through native app hooks
@@ -28,7 +30,9 @@ This project provides a focused inventory layer without collecting employee cont
 - Uses unique device upload credentials after enrollment
 - Works without third-party Python runtime dependencies
 
-Current signatures include ChatGPT, Claude, Cursor, GitHub Copilot, Windsurf, Ollama, LM Studio, Jan, AnythingLLM, Open WebUI, LocalAI, Dify, CrewAI, AutoGen, LangGraph/LangChain, and MCP servers.
+Current signatures include ChatGPT, Claude, Cursor, GitHub Copilot, Windsurf, Ollama, LM Studio, Jan, AnythingLLM, Open WebUI, LocalAI, Dify, CrewAI, AutoGen, LangGraph/LangChain, MCP servers, and commonly used agent CLIs such as Claude Code, OpenAI Codex, Gemini CLI, Cursor Agent, Cline, Aider, OpenCode, Goose, Continue, Kiro CLI, Amp, Qwen Code, and SWE-agent.
+
+Discovery is targeted rather than a full filesystem crawl. It checks standard application directories, exact supported executable names in bounded executable directories, supported MCP configuration files, and processes selected by the operating system for the current user. See the [detection catalog](docs/detection-catalog.md) for evidence semantics, limitations, and the official sources used for CLI signatures.
 
 For active agent runtimes, the inventory reports the framework, host application, runtime executable, relationship, and aggregated instance count. Native hook adapters add session and tool lifecycle evidence without sending hook payloads, process IDs, prompts, responses, code, tool arguments, or raw commands.
 
@@ -42,7 +46,7 @@ The collector records inventory metadata. It does **not** collect:
 - MCP arguments, environment values, headers, or remote URLs
 - Full executable paths or raw command lines
 
-Paths and sanitized command structures are converted to SHA-256 fingerprints on the endpoint. Unknown processes are ignored by default.
+Paths and sanitized command structures are converted to SHA-256 fingerprints on the endpoint. Readable executables in approved install roots receive a separate SHA-256 content digest for version and integrity comparison. Binary contents are never uploaded, and unknown processes are ignored by default. See [Binary fingerprinting](docs/fingerprinting.md) for the distinction and limitations.
 
 ## Architecture
 
@@ -64,52 +68,40 @@ See [Architecture](docs/architecture.md) for the data flow and trust boundaries.
 - Python 3.9 or newer
 - Python 3.10 or newer for the optional MCP server
 - macOS, Windows, or Linux
-- Permission to list local processes
+- Ordinary permission to list the current user's processes
 - HTTPS ingress for any non-local deployment
 
 ## Self-service install on macOS
 
-The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the Mac, installs adapters for detected AI applications, starts the server and collector at login, and opens the dashboard.
+The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the Mac, installs adapters for detected AI applications, starts the server and collector at login, and opens the dashboard. It does not use `sudo` or request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring.
 
 ### Tester quick start
 
-On a disposable evaluation Mac, install EdgeDisco using the supported installer:
+Download and inspect the installer, then run it:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
+curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
+less install.sh
+bash install.sh
 ```
 
-Open a new Terminal window, then run:
+For a disposable evaluation Mac, the shorter curl-pipe form is available after reviewing the source:
 
 ```bash
-edgedisco demo
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh)"
 ```
 
-The browser opens the local dashboard already signed in and shows **DEMO LAB · SIMULATED TEST WORKLOADS** evidence for CrewAI, AutoGen, LangGraph/LangChain, and MCP Server.
+No `sudo` is required. When setup finishes, the terminal prints the local dashboard address. The administrator token remains in the protected local configuration file for manual sign-in if needed.
 
-If automatic sign-in is unavailable and the dashboard asks for the admin token, copy it to the clipboard without displaying it:
+Open a new Terminal window and run `edgedisco demo`. The browser opens the local dashboard already signed in and shows **DEMO LAB · SIMULATED TEST WORKLOADS** evidence for CrewAI, AutoGen, LangGraph/LangChain, and MCP Server. macOS may display its normal Background Items notification for the per-user services; EdgeDisco does not bypass that platform notice.
+
+If automatic sign-in is unavailable and the dashboard asks for the admin token, copy it without displaying it:
 
 ```bash
 grep '^export AAI_ADMIN_TOKEN=' ~/.edgedisco/server.env | cut -d= -f2- | tr -d '\n' | pbcopy
 ```
 
 Paste with **Command+V**. Keep the token private: it grants administrative access to the local EdgeDisco server. Never include it in GitHub issues, logs, screenshots, chat, or bug reports.
-
-Download and inspect the installer, then run it:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
-less install.sh
-bash install.sh
-```
-
-For a disposable evaluation Mac, the same installer can be run directly:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
-```
-
-No `sudo` is required. When setup finishes, the terminal prints the local dashboard address. The administrator token remains in the protected local configuration file for manual sign-in if needed.
 
 The installer creates a stable `edgedisco` command for normal Terminal sessions (no venv activation and no repository checkout). Open a new Terminal window after install, then:
 
@@ -156,7 +148,7 @@ The demo starts **SIMULATED TEST WORKLOADS** — lightweight local fixture proce
 Clone the repository and create an isolated environment:
 
 ```bash
-git clone https://github.com/nsabharwal/edgedisco.git
+git clone https://github.com/edgedisco/edgedisco.git
 cd edgedisco
 python3 -m venv .venv
 . .venv/bin/activate
@@ -243,9 +235,10 @@ For self-service testing and managed macOS deployment guidance, see [Deploy on m
 
 Other deployment assets:
 
-- Linux systemd unit: `deploy/ai-inventory-agent.service`
-- Windows configuration helper: `deploy/install-agent.ps1`
-- macOS LaunchDaemon example: `deploy/com.trust3.ai-inventory.plist`
+- Linux per-user systemd unit: `deploy/ai-inventory-agent.service`
+- Windows current-user configuration helper: `deploy/install-agent.ps1`
+
+Collectors must run in the target user's session. A root daemon or Windows LocalSystem service inventories the service account rather than the person running local agents and is not a supported deployment model.
 
 ## Container deployment
 

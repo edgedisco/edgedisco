@@ -4,7 +4,11 @@
 
 ### Endpoint collector
 
-The collector performs an allowlisted scan of local process metadata, parent-child process lineage, installed application metadata, and supported MCP configuration locations. Native app hooks write sanitized agent lifecycle events to a locked local spool. The collector forwards inventory and runtime batches independently, allowing hooks to remain fast and fail-open when the network is unavailable.
+The collector performs an allowlisted scan of installed application metadata, exact supported CLI entry points, operating-system-selected current-user process metadata and parent-child lineage, and supported MCP configuration locations. It does not recursively crawl the filesystem or search arbitrary `PATH` entries. Native app hooks write sanitized agent lifecycle events to a locked local spool. The collector forwards inventory and runtime batches independently, allowing hooks to remain fast and fail-open when the network is unavailable.
+
+An installed-app or CLI observation proves that a supported entry point was present when scanned; it does not prove use. A process observation proves that a matching current-user process was visible during that scan. Process evidence is heuristic and short-lived. Native hooks provide the higher-confidence session and tool lifecycle evidence. The [detection catalog](detection-catalog.md) records the supported signatures and their evidence sources.
+
+For an already-discovered executable inside an approved install root, the collector may compute a bounded SHA-256 content digest. The digest is secondary evidence and never replaces the stable logical asset fingerprint. The packaged static fingerprint library supplies product signatures and can carry version-, platform-, and architecture-specific known binary hashes as maintainers verify releases. An unlisted hash means the artifact is not yet in that library; it is not automatically malicious. See [Binary fingerprinting](fingerprinting.md).
 
 ### Runtime adapters
 
@@ -61,6 +65,7 @@ sequenceDiagram
 | Time | Observed, received, first seen, last seen | Stored as UTC timestamps |
 | Path | Executable or configuration location | SHA-256 fingerprint only |
 | Command | Sanitized command structure | SHA-256 fingerprint only |
+| Executable content | SHA-256 of an allowlisted regular file, catalog status and library version | Binary bytes are not uploaded; protected and out-of-scope paths are not opened |
 | MCP | Server name, owner application, transport, executable basename | Arguments, environment, headers, and URLs excluded |
 | Agent runtime | Framework, host app, runtime basename, relationship, instance count | Process IDs and raw arguments excluded |
 | Agent session | App, hashed session and agent IDs, agent type, model, status, duration | Prompt, response, code, transcript, and raw identity excluded |
@@ -72,6 +77,8 @@ sequenceDiagram
 - The API validates shape, field presence, types, and asset count.
 - Inventory ingestion rejects unknown fields, arbitrary metadata, invalid hashes, and timestamps without a timezone. Custom collectors must use the supported schema; stored evidence from earlier versions is not retroactively sanitized.
 - Runtime ingestion rejects fields outside its explicit metadata allowlist.
+- Inventory schema 2 carries optional binary evidence; the server continues to accept schema 1 reports during staged upgrades. Deploy the schema-2-capable server before schema-2 agents in a managed fleet.
 - TLS termination is required outside localhost.
 - Administrator access is independent from endpoint upload access.
 - The database and backups contain compliance evidence and require restricted access.
+- macOS collection is per-user and unprivileged. Root LaunchDaemons are intentionally unsupported because they inspect the wrong user and expand privilege without improving coverage.

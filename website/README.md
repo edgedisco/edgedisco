@@ -12,4 +12,4 @@ python3 -m http.server 8000 --directory website
 
 Open <http://localhost:8000>. Deploy the contents of `website/` to any static host.
 
-The install snippet explicitly selects the canonical `edgedisco/edgedisco` source archive because the current installer still defaults to the repository's former location. Update that snippet if the installer's default is changed.
+The install snippet explicitly selects the canonical `edgedisco/edgedisco` source archive. Keep it aligned with the installer's default if repository hosting changes.

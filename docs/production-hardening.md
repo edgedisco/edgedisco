@@ -32,6 +32,7 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Publish checksums and verify them during installation.
 - Deploy with MDM and monitor service health and version drift.
 - Protect local device credentials from non-administrator users.
+- Run collectors in each target user's context; do not use root, LocalSystem, or a macOS LaunchDaemon for current-user discovery.
 
 ## Privacy and workforce process
 
@@ -39,6 +40,9 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Document lawful purpose, data fields, access, retention, and employee notice.
 - Validate that local collection rules match the published notice.
 - Review new detection signatures for false positives and unnecessary data.
+- Revalidate executable names, package markers, and standard install locations against vendor releases on a regular cadence.
+- Review and sign static fingerprint-library updates; record release, distribution, platform, architecture, digest provenance, and review date.
+- Replace low-entropy path, command, workspace, and user SHA-256 values with a versioned per-device or per-tenant HMAC-SHA-256 design before treating them as anonymized identifiers.
 
 ## Operational readiness
 
