@@ -6,9 +6,16 @@ import io
 import json
 import secrets
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .otlp_events import project_asset
+
+OTLP_MAX_PENDING = 5_000
+OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
+OTLP_MAX_AGE_DAYS = 7
 
 
 def utc_now() -> str:
@@ -20,8 +27,15 @@ def token_hash(token: str) -> str:
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, otlp_enabled: bool = False,
+                 otlp_max_pending: int = OTLP_MAX_PENDING,
+                 otlp_max_payload_bytes: int = OTLP_MAX_PAYLOAD_BYTES,
+                 otlp_max_age_days: int = OTLP_MAX_AGE_DAYS):
         self.path = path
+        self.otlp_enabled = otlp_enabled
+        self.otlp_max_pending = max(1, otlp_max_pending)
+        self.otlp_max_payload_bytes = max(1, otlp_max_payload_bytes)
+        self.otlp_max_age_days = max(1, otlp_max_age_days)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -78,6 +92,26 @@ class Database:
                     PRIMARY KEY(device_id,session_hash,agent_hash)
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_seen ON agent_sessions(last_seen);
+                CREATE TABLE IF NOT EXISTS otlp_outbox (
+                    id TEXT PRIMARY KEY, asset_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL, payload_bytes INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','retry','delivered','failed')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL,
+                    delivered_at TEXT, last_error_code TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_otlp_outbox_due
+                    ON otlp_outbox(status,next_attempt_at);
+                CREATE TABLE IF NOT EXISTS otlp_asset_state (
+                    asset_key TEXT PRIMARY KEY, state_hash TEXT NOT NULL,
+                    last_outbox_id TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS otlp_export_status (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    dropped_events_total INTEGER NOT NULL DEFAULT 0,
+                    last_dropped_at TEXT, last_drop_reason TEXT
+                );
+                INSERT OR IGNORE INTO otlp_export_status(id) VALUES(1);
             """)
 
     def enroll(self, metadata: dict[str, Any]) -> tuple[str, str]:
@@ -130,7 +164,91 @@ class Database:
                       item.get("path_hash"), item.get("command_hash"),
                       json.dumps(item.get("metadata", {}), sort_keys=True),
                       1 if item.get("running") else 0, observed_at, observed_at))
+            if self.otlp_enabled:
+                conn.execute("SAVEPOINT otlp_projection")
+                try:
+                    self._queue_otlp_observations(conn, device_id, observed_at, assets)
+                    conn.execute("RELEASE SAVEPOINT otlp_projection")
+                except (sqlite3.Error, TypeError, ValueError):
+                    # Export bookkeeping must not roll back local inventory.
+                    conn.execute("ROLLBACK TO SAVEPOINT otlp_projection")
+                    conn.execute("RELEASE SAVEPOINT otlp_projection")
         return len(assets)
+
+    @staticmethod
+    def _drop_outbox_row(conn: sqlite3.Connection, row: sqlite3.Row, now: str, reason: str) -> None:
+        conn.execute("DELETE FROM otlp_outbox WHERE id=?", (row["id"],))
+        conn.execute("DELETE FROM otlp_asset_state WHERE asset_key=? AND last_outbox_id=?",
+                     (row["asset_key"], row["id"]))
+        conn.execute("""UPDATE otlp_export_status SET dropped_events_total=dropped_events_total+1,
+                     last_dropped_at=?,last_drop_reason=? WHERE id=1""", (now, reason))
+
+    def _queue_otlp_observations(self, conn: sqlite3.Connection, device_id: str,
+                                 observed_at: str, assets: list[dict[str, Any]]) -> None:
+        now = utc_now()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.otlp_max_age_days)).isoformat()
+        expired = conn.execute("""SELECT id,asset_key FROM otlp_outbox
+            WHERE status IN ('pending','retry') AND created_at<? ORDER BY created_at,id""", (cutoff,)).fetchall()
+        for row in expired:
+            self._drop_outbox_row(conn, row, now, "age")
+
+        for asset in assets:
+            projected = project_asset(device_id, observed_at, asset)
+            if projected is None:
+                continue
+            asset_key, state_hash, event = projected
+            prior = conn.execute("SELECT state_hash FROM otlp_asset_state WHERE asset_key=?", (asset_key,)).fetchone()
+            if prior and prior["state_hash"] == state_hash:
+                continue
+            event_id = "sha256:" + hashlib.sha256(uuid.uuid4().bytes).hexdigest()
+            event["attributes"]["edgedisco.observation.id"] = event_id
+            payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            payload_bytes = len(payload.encode("utf-8"))
+            if payload_bytes > self.otlp_max_payload_bytes:
+                conn.execute("""UPDATE otlp_export_status SET dropped_events_total=dropped_events_total+1,
+                    last_dropped_at=?,last_drop_reason='oversize' WHERE id=1""", (now,))
+                continue
+            # Superseded pending states have less value than the latest observation.
+            superseded = conn.execute("""SELECT id,asset_key FROM otlp_outbox
+                WHERE asset_key=? AND status IN ('pending','retry') ORDER BY created_at,id""", (asset_key,)).fetchall()
+            for row in superseded:
+                self._drop_outbox_row(conn, row, now, "superseded")
+            while True:
+                count, size = conn.execute("""SELECT COUNT(*),COALESCE(SUM(payload_bytes),0)
+                    FROM otlp_outbox WHERE status IN ('pending','retry')""").fetchone()
+                if count < self.otlp_max_pending and size + payload_bytes <= self.otlp_max_payload_bytes:
+                    break
+                oldest = conn.execute("""SELECT id,asset_key FROM otlp_outbox
+                    WHERE status IN ('pending','retry') ORDER BY created_at,id LIMIT 1""").fetchone()
+                if oldest is None:
+                    break
+                self._drop_outbox_row(conn, oldest, now, "capacity")
+            conn.execute("""INSERT INTO otlp_outbox
+                (id,asset_key,payload_json,payload_bytes,status,next_attempt_at,created_at)
+                VALUES(?,?,?,?,?,?,?)""", (event_id, asset_key, payload, payload_bytes, "pending", now, now))
+            conn.execute("""INSERT INTO otlp_asset_state(asset_key,state_hash,last_outbox_id,updated_at)
+                VALUES(?,?,?,?) ON CONFLICT(asset_key) DO UPDATE SET
+                state_hash=excluded.state_hash,last_outbox_id=excluded.last_outbox_id,
+                updated_at=excluded.updated_at""", (asset_key, state_hash, event_id, now))
+
+    def otlp_outbox_status(self) -> dict[str, Any]:
+        """Return non-sensitive queue health for future CLI/status presentation."""
+        with self.connect() as conn:
+            counts = {row["status"]: row["count"] for row in conn.execute(
+                "SELECT status,COUNT(*) AS count FROM otlp_outbox GROUP BY status"
+            )}
+            status = conn.execute("SELECT * FROM otlp_export_status WHERE id=1").fetchone()
+        return {
+            "enabled": self.otlp_enabled,
+            "pending": counts.get("pending", 0),
+            "retry": counts.get("retry", 0),
+            "delivered": counts.get("delivered", 0),
+            "failed": counts.get("failed", 0),
+            "dropped_events_total": status["dropped_events_total"],
+            "last_dropped_at": status["last_dropped_at"],
+            "last_drop_reason": status["last_drop_reason"],
+            "degraded": status["dropped_events_total"] > 0,
+        }
 
     def summary(self) -> dict[str, Any]:
         active_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()

@@ -231,6 +231,9 @@ def serve(host: str, port: int, db_path: Path) -> None:
         raise RuntimeError("AAI_ADMIN_TOKEN and AAI_ENROLLMENT_TOKEN must be at least 24 characters")
     if hmac.compare_digest(admin, enroll):
         raise RuntimeError("administrator and enrollment tokens must be different")
-    server = InventoryServer((host, port), Database(db_path), admin, enroll)
+    server = InventoryServer(
+        (host, port), Database(db_path, otlp_enabled=os.environ.get("EDGEDISCO_OTLP_OUTBOX_ENABLED") == "true"),
+        admin, enroll,
+    )
     print(f"AI Asset Inventory listening on http://{host}:{port}")
     server.serve_forever()
