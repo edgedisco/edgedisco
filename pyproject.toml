@@ -29,6 +29,7 @@ classifiers = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.2,<3; python_version >= '3.10'"]
+otlp = ["opentelemetry-proto==1.39.1", "protobuf==6.33.6"]
 
 [project.scripts]
 ai-inventory = "ai_asset_inventory.cli:main"
