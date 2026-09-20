@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import re
 import stat
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
+from contextlib import contextmanager
 
 
 CATALOG_RESOURCE = "fingerprints.json"
@@ -105,11 +107,40 @@ def known_binary(name: str, sha256: str) -> BinaryFingerprint | None:
     return None
 
 
+@contextmanager
+def _open_regular(path: Path):
+    """Open without following swapped symlinks or blocking on a substituted FIFO."""
+    parent_fd = None
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        if os.name == "posix":
+            parent_fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+            for part in path.parts[1:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = child
+            descriptor = os.open(path.name, flags, dir_fd=parent_fd)
+        else:
+            descriptor = os.open(path, flags | getattr(os, "O_BINARY", 0))
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        stream = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with stream:
+            yield stream
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def sha256_file(path: Path, *, max_bytes: int = MAX_BINARY_BYTES) -> str | None:
     """Hash one regular file, rejecting oversized, changing, or unreadable files."""
     try:
-        resolved = path.resolve(strict=True)
-        before = resolved.stat()
+        resolved = Path(os.path.abspath(path))
+        before = resolved.lstat()
         if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
             return None
         key = (
@@ -120,11 +151,18 @@ def sha256_file(path: Path, *, max_bytes: int = MAX_BINARY_BYTES) -> str | None:
         if cached:
             return cached
         hasher = hashlib.sha256()
-        with resolved.open("rb") as handle:
+        with _open_regular(resolved) as handle:
             opened = os_fstat(handle.fileno())
             if (opened.st_dev, opened.st_ino, opened.st_size) != (before.st_dev, before.st_ino, before.st_size):
                 return None
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            remaining = max_bytes
+            while True:
+                chunk = handle.read(min(1024 * 1024, remaining + 1))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                if remaining < 0:
+                    return None
                 hasher.update(chunk)
             after = os_fstat(handle.fileno())
         if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (

@@ -21,7 +21,7 @@ class FingerprintLibraryTests(unittest.TestCase):
 
     def test_file_sha256_matches_bytes_and_changes_after_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent"
+            path = Path(directory).resolve() / "agent"
             path.write_bytes(b"first")
             first = fingerprint_library.sha256_file(path)
             self.assertEqual(first, hashlib.sha256(b"first").hexdigest())

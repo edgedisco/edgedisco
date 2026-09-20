@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 from .fingerprint_library import AGENT_FINGERPRINTS, LIBRARY_VERSION, known_binary, sha256_file
 from .models import Asset
+from .path_policy import allowed_path
 
 _APPLICATION_SIGNATURES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("ChatGPT", "OpenAI", ("chatgpt", "openai.chat")),
@@ -105,6 +106,10 @@ class ProcessObservation:
     args: list[str]
 
 
+class ProcessScanUnavailable(RuntimeError):
+    """A failed process snapshot must never be interpreted as stopped processes."""
+
+
 def _process_rows() -> list[ProcessObservation]:
     system = platform.system()
     rows: list[ProcessObservation] = []
@@ -121,9 +126,15 @@ def _process_rows() -> list[ProcessObservation]:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True, text=True, timeout=15, check=True,
             ).stdout
-            parsed = json.loads(raw or "[]")
-            items = parsed if isinstance(parsed, list) else [parsed] if isinstance(parsed, dict) else []
+            if not raw.strip():
+                raise ProcessScanUnavailable("process enumeration returned no output")
+            parsed = json.loads(raw)
+            if not isinstance(parsed, (list, dict)):
+                raise ProcessScanUnavailable("invalid process enumeration")
+            items = parsed if isinstance(parsed, list) else [parsed]
             for item in items:
+                if not isinstance(item, dict) or type(item.get("ProcessId")) is not int:
+                    raise ProcessScanUnavailable("invalid process row")
                 cmd = str(item.get("CommandLine") or "")
                 rows.append(ProcessObservation(item.get("ProcessId"), item.get("ParentProcessId"), str(item.get("Name") or ""), [cmd]))
         else:
@@ -135,8 +146,12 @@ def _process_rows() -> list[ProcessObservation]:
                 match = re.match(r"\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$", line)
                 if match:
                     rows.append(ProcessObservation(int(match.group(1)), int(match.group(2)), match.group(3), [match.group(4)]))
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        return []
+                elif line.strip():
+                    raise ProcessScanUnavailable("malformed process row")
+            if not rows:
+                raise ProcessScanUnavailable("process enumeration returned no rows")
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ProcessScanUnavailable("current-user process enumeration failed") from exc
     return rows
 
 
@@ -192,29 +207,38 @@ def _is_generic_runtime_name(name: str) -> bool:
 
 def _identity_token_index(parts: list[str], runtime: str) -> int | None:
     """Locate only the module, script, package, or image token of a runtime."""
-    if runtime.startswith("python"):
-        if "-c" in parts:
-            return None
-        if "-m" in parts:
-            candidate = parts.index("-m") + 1
-            return candidate if candidate < len(parts) else None
-        return next((
-            index for index, part in enumerate(parts[1:], 1)
-            if not part.startswith("-") and (
-                part.lower().endswith((".py", ".pyw")) or "/" in part or "\\" in part
-            )
-        ), None)
-    if runtime in {"node", "node.exe"}:
-        if "-e" in parts or "--eval" in parts:
-            return None
-        return next((
-            index for index, part in enumerate(parts[1:], 1)
-            if not part.startswith("-") and (
-                part.lower().endswith((".js", ".cjs", ".mjs")) or "/" in part or "\\" in part
-            )
-        ), None)
-    if runtime in {"npx", "npx.exe", "uvx"}:
-        return next((index for index, part in enumerate(parts[1:], 1) if not part.startswith("-")), None)
+    python = runtime.startswith("python")
+    node = runtime in {"node", "node.exe"}
+    runner = runtime in {"npx", "npx.exe", "uvx"}
+    if python or node or runner:
+        options_with_values = ({"-W", "-X"} if python else
+            {"-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C"}
+            if node else {"--cache", "--registry", "--package", "-p", "--from", "--with", "--python", "--index-url"})
+        boolean_options = ({"-B", "-E", "-I", "-s", "-S", "-u", "-v", "-O", "-OO", "-q"} if python else
+            {"--no-warnings", "--enable-source-maps", "--inspect", "--inspect-brk"} if node else
+            {"-y", "--yes", "--no-install", "--offline", "--no-cache"})
+        index = 1
+        while index < len(parts):
+            part = parts[index]
+            if part == "--":
+                return index + 1 if index + 1 < len(parts) else None
+            if part == "-" or (python and part.startswith("-c")) or (node and part in {"-e", "--eval", "-p", "--print"}):
+                return None
+            if python and part == "-m":
+                return index + 1 if index + 1 < len(parts) else None
+            if not part.startswith("-"):
+                return index
+            if part in options_with_values:
+                index += 2
+            elif part in boolean_options or ("=" in part and part.split("=", 1)[0] in options_with_values):
+                index += 1
+            elif python and (part.startswith("-W") or part.startswith("-X")):
+                index += 1
+            else:
+                # Unknown interpreter options are ambiguous; do not inspect
+                # their values or later application arguments for identities.
+                return None
+        return None
     if runtime == "docker" and "run" in parts:
         skip_value = False
         for index in range(parts.index("run") + 1, len(parts)):
@@ -360,12 +384,14 @@ def _agent_runtime_assets(rows: list[ProcessObservation], classifications: dict[
 
 
 def _mac_bundle_version(app_path: Path) -> str | None:
-    info = app_path / "Contents" / "Info.plist"
+    info = allowed_path(app_path / "Contents" / "Info.plist", _application_roots())
+    if info is None:
+        return None
     try:
         with info.open("rb") as handle:
             data = plistlib.load(handle)
         return str(data.get("CFBundleShortVersionString") or data.get("CFBundleVersion") or "") or None
-    except (OSError, plistlib.InvalidFileException):
+    except (OSError, plistlib.InvalidFileException, AttributeError):
         return None
 
 
@@ -389,12 +415,14 @@ def _installed_candidates() -> Iterable[tuple[str, Path, str | None]]:
     system = platform.system()
     if system == "Darwin":
         for root in _application_roots():
-            if root.exists():
+            if allowed_path(root, _application_roots()) is not None:
                 for path in root.glob("*.app"):
+                    if allowed_path(path, _application_roots()) is None:
+                        continue
                     yield path.stem, path, _mac_bundle_version(path)
     elif system == "Windows":
         for root in _application_roots():
-            if root.exists():
+            if allowed_path(root, _application_roots()) is not None:
                 try:
                     for path in root.iterdir():
                         yield path.name, path, None
@@ -402,8 +430,11 @@ def _installed_candidates() -> Iterable[tuple[str, Path, str | None]]:
                     continue
     else:
         for root in _application_roots():
-            if root.exists():
+            if allowed_path(root, _application_roots()) is not None:
                 for path in root.glob("*.desktop"):
+                    path = allowed_path(path, _application_roots())
+                    if path is None:
+                        continue
                     try:
                         text = path.read_text(errors="replace")[:32_768]
                     except OSError:
@@ -469,27 +500,8 @@ def _hash_roots() -> tuple[Path, ...]:
     return tuple(dict.fromkeys(Path(os.path.abspath(root)) for root in roots))
 
 
-def _within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
 def _safe_binary_path(path: Path | None) -> Path | None:
-    if path is None:
-        return None
-    lexical = Path(os.path.abspath(path))
-    roots = _hash_roots()
-    if not any(_within(lexical, root) for root in roots):
-        return None
-    try:
-        resolved = lexical.resolve(strict=True)
-        resolved_roots = tuple(root.resolve(strict=False) for root in roots)
-    except OSError:
-        return None
-    return resolved if any(_within(resolved, root) for root in resolved_roots) else None
+    return allowed_path(path, _hash_roots()) if path is not None else None
 
 
 def _binary_evidence(name: str, path: Path | None) -> tuple[str | None, str | None]:
@@ -503,7 +515,9 @@ def _binary_evidence(name: str, path: Path | None) -> tuple[str | None, str | No
 
 
 def _mac_bundle_executable(app_path: Path) -> Path | None:
-    info = app_path / "Contents" / "Info.plist"
+    info = allowed_path(app_path / "Contents" / "Info.plist", _application_roots())
+    if info is None:
+        return None
     try:
         with info.open("rb") as handle:
             executable = plistlib.load(handle).get("CFBundleExecutable")
@@ -525,13 +539,16 @@ def _installed_cli_candidates() -> Iterable[tuple[str, str, Path]]:
             candidates.extend(root / executable for root in roots)
             if windows:
                 candidates.extend(
-                    path for root in roots if root.exists()
+                    path for root in roots if allowed_path(root, _hash_roots()) is not None
                     for path in root.glob(f"*/{executable}")
                 )
             for path in candidates:
                 try:
-                    key = str(path.resolve())
-                    if key in seen or not path.is_file():
+                    safe_path = allowed_path(path, _hash_roots())
+                    if safe_path is None:
+                        continue
+                    key = str(safe_path)
+                    if key in seen or not safe_path.is_file():
                         continue
                 except OSError:
                     continue
@@ -579,7 +596,11 @@ def _mcp_candidates() -> tuple[tuple[str, Path], ...]:
 
 
 def _mcp_paths() -> Iterable[tuple[str, Path]]:
-    return ((owner, path) for owner, path in _mcp_candidates() if path.exists())
+    roots = tuple(path.parent for _owner, path in _mcp_candidates())
+    for owner, path in _mcp_candidates():
+        safe_path = allowed_path(path, roots)
+        if safe_path is not None:
+            yield owner, safe_path
 
 
 def scan_mcp_configs() -> list[Asset]:
@@ -633,9 +654,14 @@ def _static_watch_paths() -> tuple[Path, ...]:
 
 def _static_revision() -> tuple[tuple[str, int | None, int | None, int | None, int | None], ...]:
     revision = []
+    roots = (*_application_roots(), *_hash_roots(),
+             *(p.parent for _owner, p in _mcp_candidates()))
     for path in _static_watch_paths():
         try:
-            state = path.stat()
+            safe_path = allowed_path(path, roots)
+            if safe_path is None:
+                raise OSError("unavailable path")
+            state = safe_path.stat()
             revision.append((str(path), state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns))
         except OSError:
             revision.append((str(path), None, None, None, None))

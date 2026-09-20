@@ -22,6 +22,8 @@ from . import __version__
 from .adapters import install_adapters, uninstall_adapters
 from .agent import AgentClient, UploadError
 from .configuration import load_config, migrate_config
+from .detector import _installed_cli_candidates
+from .path_policy import allowed_path
 
 
 SERVER_LABEL = "com.edgedisco.server"
@@ -401,11 +403,12 @@ def _verify_browser_bootstrap(port: int, admin_token: str) -> str:
 def detect_adapters(home: Path | None = None) -> list[str]:
     home = home or Path.home()
     found: list[str] = []
-    if Path("/Applications/Cursor.app").exists() or shutil.which("cursor"):
+    clis = {name for name, _vendor, _path in _installed_cli_candidates()}
+    if allowed_path(Path("/Applications/Cursor.app"), (Path("/Applications"),)) is not None:
         found.append("cursor")
-    if shutil.which("claude") or (home / ".claude").exists():
+    if "Claude Code" in clis or allowed_path(home / ".claude", (home / ".claude",)) is not None:
         found.append("claude-code")
-    if shutil.which("copilot") or (home / ".copilot").exists():
+    if "GitHub Copilot" in clis or allowed_path(home / ".copilot", (home / ".copilot",)) is not None:
         found.append("github-copilot")
     return found
 

@@ -142,7 +142,7 @@ class DetectorTests(unittest.TestCase):
 
     def test_cli_candidate_search_does_not_recurse(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             direct = root / "codex"
             nested = root / "nested" / "claude"
             direct.touch()
@@ -156,7 +156,7 @@ class DetectorTests(unittest.TestCase):
 
     def test_windows_app_scan_checks_standard_product_directories(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             program_files = root / "Program Files"
             local_programs = root / "Local" / "Programs"
             (program_files / "Cursor").mkdir(parents=True)
@@ -173,8 +173,8 @@ class DetectorTests(unittest.TestCase):
 
     def test_binary_hashing_stays_inside_safe_roots(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "safe"
-            outside = Path(directory) / "Documents"
+            root = Path(directory).resolve() / "safe"
+            outside = Path(directory).resolve() / "Documents"
             root.mkdir()
             outside.mkdir()
             binary = root / "codex"

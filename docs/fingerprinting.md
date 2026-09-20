@@ -33,9 +33,9 @@ Library updates must keep the schema version explicit, use lowercase 64-characte
 Content hashing happens only after discovery and only for regular files in approved install roots such as `/Applications`, `~/Applications`, `/opt/homebrew`, `/usr/local`, and the documented user CLI directories. EdgeDisco:
 
 - Never recursively hashes an application bundle or home directory.
-- Rejects a symlink when its resolved target leaves the approved roots.
+- Checks each symlink destination before following it; the allowlist itself is never expanded by resolving a symlinked root. The same path policy guards application metadata, MCP discovery, static-cache watchers, and setup's bounded adapter detection.
 - Refuses special files and files larger than 512 MiB.
-- Reads in bounded chunks and verifies file identity and metadata before and after reading.
+- Enforces the total byte limit during reading, even if the file grows, and verifies file identity and metadata before and after reading. POSIX file opens refuse symlink traversal and use nonblocking mode so a substituted FIFO cannot hang hashing.
 - Caches a digest by resolved path, device, inode, size, modification time, and change time for the collector process.
 - Treats permission errors and disappearing or changing files as a skipped observation; it never retries with `sudo` or asks for broader access.
 
