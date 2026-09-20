@@ -106,6 +106,10 @@ class InstallerTests(unittest.TestCase):
             root.mkdir()
             evidence = root / "existing-evidence.keep"
             evidence.write_text("preserve")
+            old_managed = root / "bin/edgedisco"
+            old_managed.parent.mkdir()
+            old_managed.write_text("#!/bin/sh\necho old-managed-edgedisco\n")
+            old_managed.chmod(0o755)
             subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "venv")], check=True)
 
             archive = home / "source.tar.gz"
@@ -116,7 +120,13 @@ class InstallerTests(unittest.TestCase):
                     if path.is_file() and "__pycache__" not in path.parts:
                         tar.add(path, arcname=f"edgedisco-main/{path.relative_to(REPO)}")
             port = _free_port()
-            (root / "server.env").write_text(f"EDGEDISCO_PORT={port}\n")
+            admin_token = "existing-admin-token-for-upgrade-test"
+            enrollment_token = "existing-enrollment-token-for-upgrade-test"
+            (root / "server.env").write_text(
+                f"export AAI_ADMIN_TOKEN={admin_token}\n"
+                f"export AAI_ENROLLMENT_TOKEN={enrollment_token}\n"
+                f"EDGEDISCO_PORT={port}\n"
+            )
             env = dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(root),
                        EDGEDISCO_ARCHIVE_URL=archive.as_uri(),
                        VIRTUAL_ENV=str(unrelated),
@@ -145,6 +155,13 @@ class InstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(remote.returncode, 0, remote.stderr)
                 self.assertIn("EdgeDisco installation verified.", remote.stdout)
+                self.assertIn("Another edgedisco command is currently active from:", remote.stdout)
+                self.assertIn(str(old_cli), remote.stdout)
+                self.assertIn(str(root / "bin/edgedisco") + " demo", remote.stdout)
+                self.assertIn("Open a new Terminal", remote.stdout)
+                self.assertNotIn(admin_token, remote.stdout + remote.stderr)
+                self.assertNotIn(enrollment_token, remote.stdout + remote.stderr)
+                self.assertNotIn("VIRTUAL_ENV", remote.stdout + remote.stderr)
                 self.assertEqual(sentinel.read_text(), "untouched")
                 self.assertEqual(old_cli.read_text(), "#!/bin/sh\necho old-edgedisco\n")
                 self.assertEqual(evidence.read_text(), "preserve")
@@ -169,6 +186,13 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(old_public.read_text(), "#!/bin/sh\necho another-old-edgedisco\n")
                 self.assertTrue((root / "bin/edgedisco").is_file())
                 self.assertTrue(os.access(root / "bin/edgedisco", os.X_OK))
+                self.assertNotIn("old-managed-edgedisco", old_managed.read_text())
+                self.assertIn("exec ", old_managed.read_text())
+                values = (root / "server.env").read_text()
+                self.assertIn(f"AAI_ADMIN_TOKEN={admin_token}", values)
+                self.assertIn(f"AAI_ENROLLMENT_TOKEN={enrollment_token}", values)
+                config = json.loads((root / "agent.json").read_text())
+                device_token = config["device_token"]
 
                 # A shell alias can defeat PATH integration. The installer must
                 # report that verification failure with a nonzero status.
@@ -199,8 +223,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual({row["name"] for row in browser_summary["items"]
                                   if row["metadata"].get("demo_lab")},
                                  {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server"})
-                token = next(line.split("=", 1)[1] for line in (root / "server.env").read_text().splitlines()
-                             if line.startswith("export AAI_ADMIN_TOKEN="))
+                token = admin_token
                 request = urllib.request.Request(
                     f"http://127.0.0.1:{port}/api/v1/summary",
                     headers={"Authorization": f"Bearer {token}"},
@@ -212,13 +235,25 @@ class InstallerTests(unittest.TestCase):
                                  {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server"})
                 self.assertTrue(all(not row["running"] for row in rows))
 
+                no_collision_env = dict(env, PATH=f"{root / 'bin'}:{fake_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+                no_collision_env.pop("VIRTUAL_ENV", None)
                 local = subprocess.run(
                     ["/bin/bash", str(REPO / "install.sh"), "--yes", "--no-open", "--port", str(port)],
-                    env=env, capture_output=True, text=True, timeout=180,
+                    env=no_collision_env, capture_output=True, text=True, timeout=180,
                 )
                 self.assertEqual(local.returncode, 0, local.stderr)
+                self.assertIn("EdgeDisco installation verified.", local.stdout)
+                self.assertNotIn("Another edgedisco command", local.stdout)
                 self.assertEqual(evidence.read_text(), "preserve")
+                self.assertIn(f"AAI_ADMIN_TOKEN={admin_token}", (root / "server.env").read_text())
+                self.assertIn(f"AAI_ENROLLMENT_TOKEN={enrollment_token}", (root / "server.env").read_text())
+                self.assertEqual(json.loads((root / "agent.json").read_text())["device_token"], device_token)
                 self.assertEqual((home / ".zprofile").read_text().count("# >>> edgedisco PATH >>>"), 1)
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    upgraded_summary = json.load(response)
+                self.assertEqual({row["name"] for row in upgraded_summary["items"]
+                                  if row["metadata"].get("demo_lab")},
+                                 {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server"})
 
                 removed = subprocess.run([str(managed), "uninstall", "--root", str(root)],
                                          env=env, capture_output=True, text=True, timeout=30)

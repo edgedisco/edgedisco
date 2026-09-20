@@ -159,10 +159,6 @@ if [[ "$FRESH_HELP" != *"demo"* ]]; then
   echo "A fresh login shell found an EdgeDisco command without the demo subcommand." >&2
   exit 1
 fi
-if [[ "$(command -v edgedisco || true)" != "$PUBLIC" ]]; then
-  echo "Your current shell may still use an older edgedisco command. Open a new Terminal window." >&2
-fi
-
 cat <<EOF
 
 EdgeDisco installation verified.
@@ -175,4 +171,21 @@ Open a new Terminal window, then run:
 Configuration and logs:
   $INSTALL_ROOT
 EOF
+CURRENT_COMMAND="$(command -v edgedisco || true)"
+if [[ -n "$CURRENT_COMMAND" && "$CURRENT_COMMAND" != "$PUBLIC" ]]; then
+  cat <<EOF
+
+Another edgedisco command is currently active from:
+  $CURRENT_COMMAND
+
+The managed EdgeDisco installation is:
+  $PUBLIC
+
+This commonly happens when an older Python virtual environment is active.
+Open a new Terminal and run:
+  edgedisco demo
+Or run the managed installation directly:
+  $PUBLIC demo
+EOF
+fi
 INSTALL_COMPLETE=true
