@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 INSTALL_ROOT="${EDGEDISCO_HOME:-$HOME/.edgedisco}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-ARCHIVE_URL="${EDGEDISCO_ARCHIVE_URL:-https://codeload.github.com/nsabharwal/edgedisco/tar.gz/refs/heads/main}"
+ARCHIVE_URL="${EDGEDISCO_ARCHIVE_URL:-https://codeload.github.com/edgedisco/edgedisco/tar.gz/refs/heads/main}"
 ASSUME_YES=false
 SETUP_ARGS=(--root "$INSTALL_ROOT")
 TEMP_DIR=""
@@ -159,20 +159,13 @@ echo "Configuring local services..."
 "$CLI" setup "${SETUP_ARGS[@]}"
 
 PUBLIC="$(cat "$INSTALL_ROOT/cli-launcher.path")"
-case "${SHELL:-/bin/zsh}" in
-  */bash) LOGIN_SHELL="${SHELL}" ;;
-  */zsh) LOGIN_SHELL="${SHELL}" ;;
-  *) echo "Unsupported login shell: ${SHELL}. EdgeDisco supports zsh and bash login shells." >&2; exit 1 ;;
-esac
-RESOLVED="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "$LOGIN_SHELL" -lic 'command -v edgedisco' | /usr/bin/tail -n 1)"
-if [[ "$RESOLVED" != "$PUBLIC" ]]; then
-  echo "EdgeDisco installed, but a fresh interactive login shell resolves 'edgedisco' to '$RESOLVED' instead of '$PUBLIC'." >&2
-  echo "Check command -v edgedisco and edgedisco --help before using the demo." >&2
+if [[ ! -x "$PUBLIC" ]]; then
+  echo "EdgeDisco installed, but the managed launcher is not executable: $PUBLIC" >&2
   exit 1
 fi
-FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "$LOGIN_SHELL" -lic 'edgedisco --help')"
+FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME "$PUBLIC" --help)"
 if [[ "$FRESH_HELP" != *"demo"* ]]; then
-  echo "A fresh login shell found an EdgeDisco command without the demo subcommand." >&2
+  echo "The managed EdgeDisco launcher is missing the demo subcommand." >&2
   exit 1
 fi
 cat <<EOF

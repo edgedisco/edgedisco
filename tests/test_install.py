@@ -252,16 +252,17 @@ class InstallerTests(unittest.TestCase):
                 config = json.loads((root / "agent.json").read_text())
                 device_token = config["device_token"]
 
-                # A shell alias can defeat PATH integration. The installer must
-                # report that verification failure with a nonzero status.
+                # Verification must not source arbitrary shell startup files.
+                # A user alias can shadow PATH later, but must not be executed by
+                # an installer rerun or make the managed installation fail.
                 (home / ".zshrc").write_text("alias edgedisco='echo old-shadow'\n")
                 shadowed = subprocess.run(
                     ["/bin/bash", "-c", SCRIPT, "--", "--yes", "--no-open"],
                     env=env, capture_output=True, text=True, timeout=180,
                 )
-                self.assertNotEqual(shadowed.returncode, 0)
-                self.assertNotIn("EdgeDisco installation verified.", shadowed.stdout)
-                self.assertIn("fresh interactive login shell resolves", shadowed.stderr)
+                self.assertEqual(shadowed.returncode, 0, shadowed.stdout + shadowed.stderr)
+                self.assertIn("EdgeDisco installation verified.", shadowed.stdout)
+                self.assertNotIn("old-shadow", shadowed.stdout + shadowed.stderr)
                 (home / ".zshrc").unlink()
 
                 demo = subprocess.run([str(managed), "demo"], env=env, capture_output=True,

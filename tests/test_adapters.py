@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_asset_inventory.adapters import install_claude, install_copilot, install_cursor
+from ai_asset_inventory.adapters import install_claude, install_copilot, install_cursor, uninstall_adapters
 
 
 class AdapterTests(unittest.TestCase):
@@ -27,6 +27,25 @@ class AdapterTests(unittest.TestCase):
             copilot = install_copilot(config, root / "copilot.json")
             self.assertIn("SessionStart", json.loads(claude.read_text())["hooks"])
             self.assertIn("sessionStart", json.loads(copilot.read_text())["hooks"])
+
+    def test_uninstall_preserves_unrelated_hooks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            config = home / ".edgedisco/agent.json"
+            cursor = install_cursor(config, home / ".cursor/hooks.json")
+            claude = install_claude(config, home / ".claude/settings.json")
+            copilot = install_copilot(config, home / ".copilot/hooks/edgedisco.json")
+            cursor_data = json.loads(cursor.read_text())
+            cursor_data["hooks"]["sessionStart"].append({"command": "echo keep"})
+            cursor.write_text(json.dumps(cursor_data))
+
+            removed = uninstall_adapters(home)
+
+            self.assertEqual(set(removed), {cursor, claude, copilot})
+            remaining = json.loads(cursor.read_text())
+            self.assertEqual(remaining["hooks"]["sessionStart"], [{"command": "echo keep"}])
+            self.assertNotIn("ai_asset_inventory", claude.read_text())
+            self.assertFalse(copilot.exists())
 
 
 if __name__ == "__main__":

@@ -1,18 +1,16 @@
 [Unit]
-Description=AI Asset Inventory endpoint collector
+Description=EdgeDisco endpoint collector for the logged-in user
 After=network-online.target
 
 [Service]
 Type=simple
-User=root
-ExecStart=/opt/ai-inventory/venv/bin/ai-inventory agent run --config /etc/ai-inventory/agent.json
+ExecStart=%h/.edgedisco/venv/bin/edgedisco agent run --config %h/.edgedisco/agent.json
 Restart=always
 RestartSec=15
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/etc/ai-inventory
+ReadWritePaths=%h/.edgedisco
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

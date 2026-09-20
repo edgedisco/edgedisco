@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .adapters import install_adapters
+from .adapters import install_adapters, uninstall_adapters
 from .agent import AgentClient, UploadError
 from .configuration import load_config, migrate_config
 
@@ -575,6 +575,7 @@ def uninstall_macos(*, root: Path | None = None, purge: bool = False,
     (layout.launch_agents / f"{AGENT_LABEL}.plist").unlink(missing_ok=True)
     (layout.launch_agents / f"{SERVER_LABEL}.plist").unlink(missing_ok=True)
     launcher = uninstall_cli_launcher(layout, home)
+    removed_adapters = uninstall_adapters(home)
     purged = False
     if purge:
         if layout.root.name != ".edgedisco":
@@ -592,4 +593,5 @@ def uninstall_macos(*, root: Path | None = None, purge: bool = False,
         "root": str(layout.root),
         "launcher_removed": launcher["removed"],
         "path_block_removed": launcher["path_block_removed"],
+        "adapters_removed": [str(path) for path in removed_adapters],
     }
