@@ -18,6 +18,22 @@ less install.sh
 bash install.sh
 ```
 
+Inspect built-in help without changing the system:
+
+```bash
+bash install.sh --help
+```
+
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Show all options, environment overrides, and examples, then exit |
+| `--yes` | Skip the confirmation prompt after the script has been reviewed |
+| `--port PORT` | Set the localhost server port; the default is `8080` |
+| `--all-adapters` | Install every supported app adapter instead of only detected adapters |
+| `--no-open` | Suppress browser launch; use `edgedisco dashboard` afterward for an authenticated session |
+
+The installer also accepts `EDGEDISCO_HOME` for a custom managed root, `PYTHON_BIN` for the Python 3.9+ interpreter, and `EDGEDISCO_ARCHIVE_URL` for the archive fetched by remote/stdin installation. A local `./install.sh` run from a checkout installs that checkout and does not use the archive URL. Preserve the same `EDGEDISCO_HOME` value across upgrades.
+
 The installer does not use `sudo` and does not request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring. It:
 
 1. Creates `~/.edgedisco/venv` and installs EdgeDisco there.

@@ -85,6 +85,30 @@ less install.sh
 bash install.sh
 ```
 
+Show installer help without making changes:
+
+```bash
+bash install.sh --help
+```
+
+Installer options:
+
+| Option | Behavior |
+| --- | --- |
+| `-h`, `--help` | Print usage, options, environment overrides, and examples, then exit |
+| `--yes` | Skip the interactive confirmation; intended for reviewed automation and test machines |
+| `--port PORT` | Use a local server port other than `8080` |
+| `--all-adapters` | Install all supported Cursor, Claude Code, and GitHub Copilot hooks even when the app is not detected |
+| `--no-open` | Do not open a browser during setup; later use `edgedisco dashboard` for token-free authenticated access |
+
+Environment overrides:
+
+| Variable | Behavior |
+| --- | --- |
+| `EDGEDISCO_HOME` | Change the managed installation root from `~/.edgedisco`; reuse the same value for upgrades and CLI `--root` operations |
+| `PYTHON_BIN` | Select the Python 3.9+ interpreter used to create the managed environment |
+| `EDGEDISCO_ARCHIVE_URL` | Override the source archive for remote/stdin installation; local checkout execution installs the checkout instead |
+
 For a disposable evaluation Mac, the shorter curl-pipe form is available after reviewing the source:
 
 ```bash

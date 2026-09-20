@@ -32,6 +32,33 @@ def _free_port() -> int:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_help_lists_every_option_and_override_without_installing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            env = dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(home / ".edgedisco"))
+            for command in (["/bin/bash", str(REPO / "install.sh"), "--help"],
+                            ["/bin/bash", "-c", SCRIPT, "--", "-h"]):
+                with self.subTest(command=command):
+                    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for value in ("--help", "--yes", "--port PORT", "--all-adapters", "--no-open",
+                                  "EDGEDISCO_HOME", "PYTHON_BIN", "EDGEDISCO_ARCHIVE_URL"):
+                        self.assertIn(value, result.stdout)
+                    self.assertFalse((home / ".edgedisco").exists())
+
+    def test_unknown_option_shows_help_and_fails_without_installing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            result = subprocess.run(
+                ["/bin/bash", str(REPO / "install.sh"), "--unknown"],
+                env=dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(home / ".edgedisco")),
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Unknown option: --unknown", result.stderr)
+            self.assertIn("Usage: bash install.sh [options]", result.stderr)
+            self.assertFalse((home / ".edgedisco").exists())
+
     def test_remote_stdin_failure_is_immediate_and_does_not_create_launcher(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)

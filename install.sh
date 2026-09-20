@@ -11,6 +11,34 @@ INSTALL_COMPLETE=false
 UPGRADE_BACKUP=""
 UPGRADE_STARTED=false
 
+usage() {
+  cat <<'EOF'
+Usage: bash install.sh [options]
+
+Install or upgrade the per-user EdgeDisco service on macOS.
+When run from a source checkout, installs that checkout. When run through
+stdin or outside a checkout, downloads the configured source archive.
+
+Options:
+  -h, --help          Show this help and exit without making changes.
+  --yes               Skip the interactive installation confirmation.
+  --port PORT         Bind the local server to PORT instead of 8080.
+  --all-adapters      Install all supported app hooks, detected or not.
+  --no-open           Do not open a browser during setup.
+
+Environment overrides:
+  EDGEDISCO_HOME         Installation root (default: ~/.edgedisco).
+  PYTHON_BIN             Python 3.9+ interpreter command (default: python3).
+  EDGEDISCO_ARCHIVE_URL  Source archive used by remote/stdin installation.
+
+Examples:
+  bash install.sh
+  bash install.sh --yes --no-open
+  bash install.sh --port 8090 --all-adapters
+  EDGEDISCO_HOME="$HOME/.edgedisco-test" bash install.sh --yes --no-open
+EOF
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
@@ -44,13 +72,18 @@ trap 'failed $LINENO' ERR
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -h|--help)
+      usage
+      INSTALL_COMPLETE=true
+      exit 0
+      ;;
     --yes) ASSUME_YES=true ;;
     --port)
       SETUP_ARGS+=("$1" "${2:?missing value for $1}")
       shift
       ;;
     --all-adapters|--no-open) SETUP_ARGS+=("$1") ;;
-    *) echo "Unknown option: $1" >&2; exit 2 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
@@ -148,7 +181,7 @@ echo "Installing EdgeDisco..."
 "$VENV_PYTHON" -m pip install --upgrade "$PACKAGE_SOURCE"
 CLI="$INSTALL_ROOT/venv/bin/edgedisco"
 "$CLI" --help >/dev/null
-for command in server agent hook adapters setup status uninstall mcp demo; do
+for command in server agent hook adapters setup status dashboard uninstall mcp demo; do
   if ! "$CLI" "$command" --help >/dev/null; then
     echo "Installed EdgeDisco CLI is missing '$command'; setup was not started." >&2
     exit 1
