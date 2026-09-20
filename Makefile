@@ -1,5 +1,10 @@
 .PHONY: test check build clean
 
+# Canonical test entrypoint for a source checkout.
+# The package uses a src/ layout, so bare
+#   python3 -m unittest discover -s tests -v
+# fails with ModuleNotFoundError unless the package is installed into the
+# active environment. This target sets the import path for you.
 test:
 	PYTHONPATH=src python3 -m unittest discover -s tests -v
 

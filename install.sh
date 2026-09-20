@@ -75,8 +75,10 @@ echo "Configuring local services..."
 
 cat <<EOF
 
-Useful commands:
-  $INSTALL_ROOT/venv/bin/edgedisco status
+Useful commands (open a new Terminal if 'edgedisco' is not found yet):
+  edgedisco status
+  edgedisco demo
+  edgedisco uninstall
 
 Configuration and logs:
   $INSTALL_ROOT

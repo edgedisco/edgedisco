@@ -9,7 +9,12 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
 make test
+edgedisco demo
 ```
+
+`make test` is the canonical test command from a source checkout. After the editable install, `edgedisco` is on your PATH only while `.venv` is active; without activation use `.venv/bin/edgedisco`.
+
+Self-service installs keep the package inside `~/.edgedisco/venv` as an implementation detail and expose a stable `edgedisco` command for normal Terminal sessions.
 
 The runtime intentionally has no third-party Python dependencies. Discuss any new runtime dependency before adding it.
 

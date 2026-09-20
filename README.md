@@ -71,6 +71,28 @@ See [Architecture](docs/architecture.md) for the data flow and trust boundaries.
 
 The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the Mac, installs adapters for detected AI applications, starts the server and collector at login, and opens the dashboard.
 
+### Tester quick start
+
+On a disposable evaluation Mac, install EdgeDisco using the supported installer:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
+```
+
+Open a new Terminal window, then run:
+
+```bash
+edgedisco demo
+```
+
+The browser opens the local dashboard. If asked for the admin token, copy it to the clipboard without displaying it:
+
+```bash
+grep '^export AAI_ADMIN_TOKEN=' ~/.edgedisco/server.env | cut -d= -f2- | tr -d '\n' | pbcopy
+```
+
+Paste with **Command+V**. The Evidence table shows **DEMO LAB · SIMULATED TEST WORKLOADS** records for CrewAI, AutoGen, LangGraph/LangChain, and MCP Server. Keep the token private: it grants administrative access to the local EdgeDisco server. Never include it in GitHub issues, logs, screenshots, chat, or bug reports.
+
 Download and inspect the installer, then run it:
 
 ```bash
@@ -85,26 +107,45 @@ For a disposable evaluation Mac, the same installer can be run directly:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
 ```
 
-No `sudo` is required. When setup finishes, the terminal prints the local dashboard address and its administrator token. To check the installation later:
+No `sudo` is required. When setup finishes, the terminal prints the local dashboard address and its administrator token.
+
+The installer creates a stable `edgedisco` command for normal Terminal sessions (no venv activation and no repository checkout). Open a new Terminal window after install, then:
 
 ```bash
-~/.edgedisco/venv/bin/edgedisco status
+edgedisco status
+edgedisco demo
 ```
 
-To display the administrator token again:
-
-```bash
-source ~/.edgedisco/server.env
-echo "$AAI_ADMIN_TOKEN"
-```
+The administrator token is stored in `~/.edgedisco/server.env`. Use the clipboard command in the tester quick start whenever the dashboard asks for it.
 
 Rerun `bash install.sh` to upgrade or repair the installation. Remove the background services while retaining local evidence with:
 
 ```bash
-~/.edgedisco/venv/bin/edgedisco uninstall
+edgedisco uninstall
 ```
 
 Add `--purge` only when you also want to delete credentials, logs, configuration, and collected evidence. See the [macOS self-service guide](docs/deployment-macos.md) for testing and troubleshooting.
+
+## Try the EdgeDisco Demo
+
+See Edge Discovery in action without API keys, paid LLMs, Docker, or network access.
+
+**After macOS self-service install** (no repo checkout, no development venv):
+
+```bash
+edgedisco demo
+```
+
+**From a source checkout** (development environment):
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+edgedisco demo
+```
+
+The demo starts **SIMULATED TEST WORKLOADS** — lightweight local fixture processes that expose AI runtime signatures. Discovery is performed by the **real** EdgeDisco detector (`collect_inventory()`), not hardcoded output. Metadata-only evidence is sent through the local report API and displayed in the existing dashboard, which opens automatically. Demo records are labeled **DEMO LAB** and show the fixtures as stopped after the run. No prompts, responses, credentials, or raw command lines are collected. Fixture processes are always cleaned up when the demo finishes. Sign in with the administrator token from setup if prompted.
 
 ## Developer setup from source
 
@@ -115,8 +156,10 @@ git clone https://github.com/nsabharwal/edgedisco.git
 cd edgedisco
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install .
+python -m pip install -e .
 ```
+
+This editable install registers the `edgedisco` (and `ai-inventory`) console scripts on your PATH **only while the virtual environment is active**. Without activating `.venv`, use `.venv/bin/edgedisco` instead. After the macOS self-service install, a normal Terminal can run `edgedisco` without activating any development venv.
 
 Generate two different server credentials:
 
@@ -300,11 +343,13 @@ The built-in MCP listener deliberately refuses non-localhost binding. For remote
 
 ## Development
 
-Run the automated tests:
+Canonical test command from a source checkout:
 
 ```bash
 make test
 ```
+
+`make test` configures the `src/` import path for you. Running `python3 -m unittest discover -s tests -v` against Homebrew Python **without** installing the package fails with `ModuleNotFoundError: No module named 'ai_asset_inventory'` because this project uses a `src/` layout. After `python -m pip install -e .` in the project venv, the same unittest command works because the package is installed into that environment.
 
 Build a wheel:
 
@@ -312,7 +357,7 @@ Build a wheel:
 make build
 ```
 
-The GitHub Actions workflow runs the test suite on Python 3.9 through 3.13. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
+The GitHub Actions workflow installs the package, then runs the test suite on Python 3.9 through 3.13 against the installed distribution. See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## Current limitations
 

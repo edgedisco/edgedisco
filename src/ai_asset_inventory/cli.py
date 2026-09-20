@@ -9,6 +9,7 @@ from .agent import AgentClient, write_example_config
 from .server import serve
 from .runtime import MAX_HOOK_INPUT_BYTES, RuntimeClient
 from .adapters import install_adapters
+from .demo import run_demo
 from .self_service import setup_macos, status as self_service_status, uninstall_macos
 
 
@@ -54,6 +55,10 @@ def parser() -> argparse.ArgumentParser:
     mcp.add_argument("--host", default="127.0.0.1")
     mcp.add_argument("--port", type=int, default=8081)
     mcp.add_argument("--audit-log", type=Path)
+    sub.add_parser(
+        "demo",
+        help="run a local EdgeDisco lab with simulated workloads and real discovery",
+    )
     return root
 
 
@@ -62,6 +67,8 @@ def main() -> None:
     if args.command == "server":
         serve(args.host, args.port, args.db)
         return
+    if args.command == "demo":
+        raise SystemExit(run_demo())
     if args.command == "hook":
         raw = sys.stdin.buffer.read(MAX_HOOK_INPUT_BYTES + 1)
         if len(raw) > MAX_HOOK_INPUT_BYTES:
@@ -89,6 +96,9 @@ def main() -> None:
         print(f"Admin token: {result['admin_token']}")
         print(f"Detected adapters: {', '.join(result['adapters']) or 'none'}")
         print(f"Initial inventory: {result['asset_count']} assets")
+        print(f"CLI: {result['cli']}")
+        if result.get("cli_path_integrated"):
+            print("Open a new Terminal window so 'edgedisco' is on your PATH.")
         return
     if args.command == "status":
         result = self_service_status(args.root)
@@ -100,6 +110,8 @@ def main() -> None:
             root=args.root, purge=args.purge, assume_yes=args.yes,
         )
         print("EdgeDisco background services removed")
+        if result.get("launcher_removed"):
+            print("CLI launcher removed from PATH")
         if result["data_purged"]:
             print("Local configuration, credentials, logs, and evidence removed")
         else:

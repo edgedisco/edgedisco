@@ -26,7 +26,8 @@ The installer does not use `sudo`. It:
 4. Enrolls the Mac and sends its first sanitized inventory report.
 5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot installations.
 6. Creates per-user LaunchAgents for the server and collector.
-7. Opens the dashboard and prints its administrator token.
+7. Installs a stable `edgedisco` command for normal Terminal sessions.
+8. Opens the dashboard and prints its administrator token.
 
 The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
 
@@ -46,10 +47,20 @@ For unattended test machines, review the script first and then pass `--yes --no-
 
 ## Verify the installation
 
+Open a new Terminal window after install, then:
+
 ```bash
-~/.edgedisco/venv/bin/edgedisco status
+edgedisco status
 curl http://127.0.0.1:8080/healthz
 ```
+
+Run the local discovery demo (simulated workloads, real detector; no API keys):
+
+```bash
+edgedisco demo
+```
+
+The self-service installer installs a stable `edgedisco` command for normal shells. You do not need to activate a virtual environment or type the internal install path.
 
 The status output should show `Server: healthy` and `Endpoint: enrolled`. Open `http://127.0.0.1:8080` and sign in with:
 
@@ -61,7 +72,7 @@ echo "$AAI_ADMIN_TOKEN"
 Start an agent task in Cursor, Claude Code, or GitHub Copilot. Then wait for the collector cycle or send immediately:
 
 ```bash
-~/.edgedisco/venv/bin/edgedisco agent send \
+edgedisco agent send \
   --config ~/.edgedisco/agent.json
 ```
 
@@ -100,13 +111,13 @@ bash install.sh
 Stop and remove the background services while keeping the local data:
 
 ```bash
-~/.edgedisco/venv/bin/edgedisco uninstall
+edgedisco uninstall
 ```
 
 Delete the local credentials, logs, configuration, and evidence as well:
 
 ```bash
-~/.edgedisco/venv/bin/edgedisco uninstall --purge
+edgedisco uninstall --purge
 ```
 
 The purge command asks for confirmation. The noninteractive equivalent is `--purge --yes`.

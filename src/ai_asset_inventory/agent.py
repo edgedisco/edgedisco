@@ -93,6 +93,28 @@ class AgentClient:
         inventory["runtime_event_count"] = runtime_count
         return inventory
 
+    def submit_assets(self, assets: list[Any]) -> dict[str, Any]:
+        """Upload a prepared asset inventory through the normal report API."""
+        if not self.config.get("device_token"):
+            self.enroll()
+        payload = {
+            "schema_version": 1,
+            "scan_id": str(uuid.uuid4()),
+            "observed_at": _utc_now(),
+            "device": device_metadata(),
+            "assets": [
+                asset.to_dict() if hasattr(asset, "to_dict") else dict(asset)
+                for asset in assets
+            ],
+            "privacy": {
+                "content_captured": False,
+                "secrets_captured": False,
+                "paths_hashed": True,
+                "command_lines_hashed": True,
+            },
+        }
+        return self._request("/api/v1/reports", payload, self.config["device_token"])
+
     def flush_runtime_events(self) -> int:
         path = spool_path(self.config_path, self.config)
         pending = claim_spool(path)
