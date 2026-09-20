@@ -93,7 +93,6 @@ def main() -> None:
         )
         print("EdgeDisco is ready")
         print(f"Dashboard: {result['dashboard']}")
-        print(f"Admin token: {result['admin_token']}")
         print(f"Detected adapters: {', '.join(result['adapters']) or 'none'}")
         print(f"Initial inventory: {result['asset_count']} assets")
         print(f"CLI: {result['cli']}")

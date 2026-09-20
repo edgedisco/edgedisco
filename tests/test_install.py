@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import unittest
 import urllib.request
+import http.cookiejar
 from pathlib import Path
 
 
@@ -86,6 +87,10 @@ class InstallerTests(unittest.TestCase):
             git = fake_bin / "git"
             git.write_text("#!/bin/sh\nexit 99\n")
             git.chmod(0o755)
+            browser = fake_bin / "demo-browser"
+            browser.write_text("#!/bin/sh\nprintf '%s' \"$1\" > \"$EDGEDISCO_BROWSER_URL_FILE\"\n")
+            browser.chmod(0o755)
+            browser_url_file = home / "browser-url"
 
             unrelated = home / "unrelated-venv"
             subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(unrelated)], check=True)
@@ -116,7 +121,8 @@ class InstallerTests(unittest.TestCase):
                        EDGEDISCO_ARCHIVE_URL=archive.as_uri(),
                        VIRTUAL_ENV=str(unrelated),
                        FAKE_LAUNCHCTL_STATE=str(state),
-                       BROWSER="/usr/bin/true",
+                       BROWSER=str(browser),
+                       EDGEDISCO_BROWSER_URL_FILE=str(browser_url_file),
                        PATH=f"{unrelated / 'bin'}:{fake_bin}:{os.environ.get('PATH', '')}")
             env.pop("PYTHON_BIN", None)
             env.pop("PYTHONPATH", None)
@@ -180,6 +186,19 @@ class InstallerTests(unittest.TestCase):
                                       text=True, timeout=40)
                 self.assertEqual(demo.returncode, 0, demo.stdout + demo.stderr)
                 self.assertIn("4 AI runtime families discovered", demo.stdout)
+                self.assertNotIn("manual admin-token", demo.stdout)
+                browser_url = browser_url_file.read_text()
+                self.assertTrue(browser_url.startswith(f"http://127.0.0.1:{port}/browser-bootstrap/"))
+                jar = http.cookiejar.CookieJar()
+                browser_client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+                with browser_client.open(browser_url) as response:
+                    self.assertEqual(response.url, f"http://127.0.0.1:{port}/")
+                    self.assertIn(b"DEMO LAB", response.read())
+                with browser_client.open(f"http://127.0.0.1:{port}/api/v1/summary") as response:
+                    browser_summary = json.load(response)
+                self.assertEqual({row["name"] for row in browser_summary["items"]
+                                  if row["metadata"].get("demo_lab")},
+                                 {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server"})
                 token = next(line.split("=", 1)[1] for line in (root / "server.env").read_text().splitlines()
                              if line.startswith("export AAI_ADMIN_TOKEN="))
                 request = urllib.request.Request(

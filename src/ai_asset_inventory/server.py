@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
 import time
+import threading
 import urllib.parse
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -27,6 +29,8 @@ class InventoryServer(ThreadingHTTPServer):
         self.admin_token = admin_token
         self.enrollment_token = enrollment_token
         self.session_secret = secrets.token_bytes(32)
+        self.browser_bootstraps: dict[str, float] = {}
+        self.browser_bootstrap_lock = threading.Lock()
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -34,7 +38,27 @@ class RequestHandler(BaseHTTPRequestHandler):
     server_version = "AIInventory/0.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        if getattr(self, "path", "").startswith("/browser-bootstrap/"):
+            return  # Never log a one-time browser credential.
         print(f"{self.address_string()} - {fmt % args}")
+
+    def _local_browser_request(self) -> bool:
+        try:
+            host = self.headers.get("Host", "")
+            return (ipaddress.ip_address(self.client_address[0]).is_loopback
+                    and host == f"127.0.0.1:{self.server.server_port}")
+        except ValueError:
+            return False
+
+    def _browser_session(self) -> None:
+        expiry = str(int(time.time()) + 8 * 60 * 60)
+        signature = hmac.new(self.server.session_secret, expiry.encode(), hashlib.sha256).hexdigest()
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie", f"aai_session={expiry}.{signature}; HttpOnly; SameSite=Strict; Path=/")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
 
     def _json(self, status: int, payload: Any) -> None:
         encoded = json.dumps(payload).encode()
@@ -78,6 +102,16 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/browser-bootstrap/"):
+            if not self._local_browser_request():
+                return self._json(403, {"error": "local dashboard only"})
+            code = path.removeprefix("/browser-bootstrap/")
+            digest = hashlib.sha256(code.encode()).hexdigest()
+            with self.server.browser_bootstrap_lock:
+                expiry = self.server.browser_bootstraps.pop(digest, None)
+            if not expiry or expiry < time.monotonic():
+                return self._json(401, {"error": "invalid or expired browser bootstrap"})
+            return self._browser_session()
         if path == "/healthz":
             self._json(200, {"status": "ok"})
         elif path == "/api/v1/summary":
@@ -124,13 +158,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 supplied = form.get("token", [""])[0]
                 if not hmac.compare_digest(supplied, self.server.admin_token):
                     return self._json(401, {"error": "invalid admin token"})
-                expiry = str(int(time.time()) + 8 * 60 * 60)
-                signature = hmac.new(self.server.session_secret, expiry.encode(), hashlib.sha256).hexdigest()
-                self.send_response(303)
-                self.send_header("Location", "/")
-                self.send_header("Set-Cookie", f"aai_session={expiry}.{signature}; HttpOnly; SameSite=Strict; Path=/")
-                self.end_headers()
-                return
+                return self._browser_session()
+            if path == "/api/v1/browser-bootstrap":
+                if not self._local_browser_request():
+                    return self._json(403, {"error": "local dashboard only"})
+                if not hmac.compare_digest(self._bearer(), self.server.admin_token):
+                    return self._json(401, {"error": "unauthorized"})
+                code = secrets.token_urlsafe(32)
+                digest = hashlib.sha256(code.encode()).hexdigest()
+                with self.server.browser_bootstrap_lock:
+                    now = time.monotonic()
+                    self.server.browser_bootstraps = {
+                        key: expiry for key, expiry in self.server.browser_bootstraps.items() if expiry > now
+                    }
+                    self.server.browser_bootstraps[digest] = now + 60
+                return self._json(201, {"bootstrap_path": f"/browser-bootstrap/{code}"})
             if path == "/api/v1/enroll":
                 if not hmac.compare_digest(self._bearer(), self.server.enrollment_token):
                     return self._json(401, {"error": "invalid enrollment token"})

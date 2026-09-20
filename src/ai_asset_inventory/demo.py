@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import platform
 import shutil
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 import webbrowser
 from dataclasses import replace
 from dataclasses import dataclass
@@ -379,13 +382,32 @@ def run_demo(
         if report.get("status") != "accepted" or report.get("asset_count") != len(evidence):
             raise RuntimeError("server did not accept all demo evidence")
         _print(out, f"Demo evidence saved to EdgeDisco: {server.dashboard}")
-        _print(out, "Sign in with the administrator token shown during setup if prompted.")
+        browser_url = server.dashboard
+        if getattr(server, "admin_token", None):
+            try:
+                parsed = urllib.parse.urlsplit(server.dashboard)
+                if parsed.hostname != "127.0.0.1" or parsed.scheme != "http":
+                    raise ValueError("browser bootstrap requires the local dashboard")
+                request = urllib.request.Request(
+                    server.dashboard + "/api/v1/browser-bootstrap",
+                    data=b"",
+                    headers={"Authorization": f"Bearer {server.admin_token}"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    bootstrap = json.load(response)
+                path = bootstrap["bootstrap_path"]
+                if not path.startswith("/browser-bootstrap/") or "/" in path[len("/browser-bootstrap/"):]:
+                    raise ValueError("invalid browser bootstrap response")
+                browser_url = server.dashboard + path
+            except Exception:
+                _print(out, f"Automatic browser sign-in unavailable. Visit {server.dashboard} and use manual admin-token sign-in if prompted.")
         try:
-            opened = (browser_fn or webbrowser.open)(server.dashboard)
+            opened = (browser_fn or webbrowser.open)(browser_url)
             if not opened:
-                _print(out, f"Browser did not open. Visit {server.dashboard}")
+                _print(out, f"Browser did not open. Visit {server.dashboard}; manual admin-token sign-in is available.")
         except Exception as exc:  # Browser is optional after successful persistence.
-            _print(out, f"Browser did not open ({exc}). Visit {server.dashboard}")
+            _print(out, f"Browser did not open ({exc}). Visit {server.dashboard}; manual admin-token sign-in is available.")
         return 0
     except Exception as exc:  # noqa: BLE001 — demo must always clean up
         _print(out, f"Demo failed: {exc}")

@@ -27,7 +27,7 @@ The installer does not use `sudo`. It:
 5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot installations.
 6. Creates per-user LaunchAgents for the server and collector.
 7. Installs a stable `edgedisco` command for normal Terminal sessions.
-8. Opens the dashboard and prints its administrator token.
+8. Opens the dashboard. The administrator token stays in the protected local configuration file.
 
 The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
 

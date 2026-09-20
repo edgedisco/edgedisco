@@ -1,9 +1,11 @@
 import json
+import io
 import os
 import plistlib
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +24,20 @@ from ai_asset_inventory.self_service import (
     uninstall_macos,
     write_launch_agents,
 )
+
+
+class CliPrivacyTests(unittest.TestCase):
+    @patch("ai_asset_inventory.cli.setup_macos")
+    def test_setup_does_not_print_admin_token(self, setup):
+        from ai_asset_inventory.cli import main
+        setup.return_value = {
+            "dashboard": "http://127.0.0.1:8080", "admin_token": "private-test-token",
+            "adapters": [], "asset_count": 0, "cli": "/tmp/edgedisco",
+        }
+        out = io.StringIO()
+        with patch("sys.argv", ["edgedisco", "setup", "--no-open"]), redirect_stdout(out):
+            main()
+        self.assertNotIn("private-test-token", out.getvalue())
 
 
 class FakeAgentClient:

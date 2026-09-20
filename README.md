@@ -85,13 +85,15 @@ Open a new Terminal window, then run:
 edgedisco demo
 ```
 
-The browser opens the local dashboard. If asked for the admin token, copy it to the clipboard without displaying it:
+The browser opens the local dashboard already signed in and shows **DEMO LAB · SIMULATED TEST WORKLOADS** evidence for CrewAI, AutoGen, LangGraph/LangChain, and MCP Server.
+
+If automatic sign-in is unavailable and the dashboard asks for the admin token, copy it to the clipboard without displaying it:
 
 ```bash
 grep '^export AAI_ADMIN_TOKEN=' ~/.edgedisco/server.env | cut -d= -f2- | tr -d '\n' | pbcopy
 ```
 
-Paste with **Command+V**. The Evidence table shows **DEMO LAB · SIMULATED TEST WORKLOADS** records for CrewAI, AutoGen, LangGraph/LangChain, and MCP Server. Keep the token private: it grants administrative access to the local EdgeDisco server. Never include it in GitHub issues, logs, screenshots, chat, or bug reports.
+Paste with **Command+V**. Keep the token private: it grants administrative access to the local EdgeDisco server. Never include it in GitHub issues, logs, screenshots, chat, or bug reports.
 
 Download and inspect the installer, then run it:
 
@@ -107,7 +109,7 @@ For a disposable evaluation Mac, the same installer can be run directly:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
 ```
 
-No `sudo` is required. When setup finishes, the terminal prints the local dashboard address and its administrator token.
+No `sudo` is required. When setup finishes, the terminal prints the local dashboard address. The administrator token remains in the protected local configuration file for manual sign-in if needed.
 
 The installer creates a stable `edgedisco` command for normal Terminal sessions (no venv activation and no repository checkout). Open a new Terminal window after install, then:
 
@@ -147,7 +149,7 @@ python -m pip install -e .
 edgedisco demo
 ```
 
-The demo starts **SIMULATED TEST WORKLOADS** — lightweight local fixture processes that expose AI runtime signatures. Discovery is performed by the **real** EdgeDisco detector (`collect_inventory()`), not hardcoded output. Metadata-only evidence is sent through the local report API and displayed in the existing dashboard, which opens automatically. Demo records are labeled **DEMO LAB** and show the fixtures as stopped after the run. No prompts, responses, credentials, or raw command lines are collected. Fixture processes are always cleaned up when the demo finishes. Sign in with the administrator token from setup if prompted.
+The demo starts **SIMULATED TEST WORKLOADS** — lightweight local fixture processes that expose AI runtime signatures. Discovery is performed by the **real** EdgeDisco detector (`collect_inventory()`), not hardcoded output. Metadata-only evidence is sent through the local report API and displayed in the existing dashboard, which opens automatically with a local browser session. Demo records are labeled **DEMO LAB** and show the fixtures as stopped after the run. No prompts, responses, credentials, or raw command lines are collected. Fixture processes are always cleaned up when the demo finishes. Manual administrator-token sign-in remains available if automatic sign-in fails.
 
 ## Developer setup from source
 
