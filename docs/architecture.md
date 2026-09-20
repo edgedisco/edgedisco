@@ -38,6 +38,10 @@ Runtime spool uploads are serialized independently of hook writers. Files are se
 
 Running inventory requires a current snapshot received within 15 minutes. Runtime hook uploads alone do not refresh that inventory. The dashboard marks expired inventory as stale, and the asset CSV exposes a separate `stale` column. Both CSV exports include all records, independently of the dashboard's 500-row display cap. OTLP projection includes stopped assets after snapshot reconciliation.
 
+Inventory timestamps more than five minutes ahead of server time are rejected. Previously accepted future-dated scan headers outside that tolerance do not block current reconciliation or establish freshness. A failed process query suppresses the complete report rather than implying every process stopped.
+
+The dashboard groups evidence by product and device, initially collapsed, with device/type/status/source filters. Evidence counts are not process counts: application records, executable-path process records, and inferred runtime groups can describe the same software. Runtime groups include an observed instance count; raw PIDs are not persisted. Historical records remain available. Session rows are a separate projection of delivered hook/SDK lifecycle events, never inferred from process presence.
+
 ## Data flow
 
 ```mermaid

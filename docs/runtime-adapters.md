@@ -2,6 +2,8 @@
 
 Runtime adapters capture agent lifecycle metadata from supported applications. They do not capture prompts, responses, source code, tool arguments, tool output, transcripts, credentials, email addresses, or raw workspace paths.
 
+The dashboard's **Agent sessions** table is populated only after normalized hook or SDK events reach the server. Process scanning does not create sessions. This release installs native adapters for Cursor, Claude Code, and GitHub Copilot CLI; detected Codex/OpenCode processes do not imply an installed session adapter for those tools. A configured hook is not proof of invocation: verify a new native app session produces runtime events, then check its projected session. Sessions without activity for 15 minutes are displayed as stale.
+
 ## Install adapters
 
 Run this after the endpoint is enrolled. Use an absolute configuration path:

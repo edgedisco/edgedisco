@@ -352,6 +352,8 @@ make test
 
 `make test` configures the `src/` import path for you. Running `python3 -m unittest discover -s tests -v` against Homebrew Python **without** installing the package fails with `ModuleNotFoundError: No module named 'ai_asset_inventory'` because this project uses a `src/` layout. After `python -m pip install -e .` in the project venv, the same unittest command works because the package is installed into that environment.
 
+Use the developer environment for isolated regression tests, but use an **installer-managed installation** for final macOS upgrade/end-to-end verification. An editable checkout does not exercise package replacement or real LaunchAgents. See the [final installed-system test checklist](docs/deployment-macos.md#final-installed-system-test). Dashboard JavaScript tests also run when Node is available.
+
 Build a wheel:
 
 ```bash
