@@ -5,13 +5,20 @@ INSTALL_ROOT="${EDGEDISCO_HOME:-$HOME/.edgedisco}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 ARCHIVE_URL="${EDGEDISCO_ARCHIVE_URL:-https://codeload.github.com/nsabharwal/edgedisco/tar.gz/refs/heads/main}"
 ASSUME_YES=false
-SETUP_ARGS=()
+SETUP_ARGS=(--root "$INSTALL_ROOT")
 TEMP_DIR=""
+INSTALL_COMPLETE=false
 
 cleanup() {
+  local status=$?
+  trap - EXIT
   if [[ -n "$TEMP_DIR" ]]; then
-    /bin/rm -rf "$TEMP_DIR"
+    /bin/rm -rf "$TEMP_DIR" || status=1
   fi
+  if [[ "$INSTALL_COMPLETE" != true && "$status" -eq 0 ]]; then
+    status=1
+  fi
+  exit "$status"
 }
 failed() {
   local code=$?
@@ -75,7 +82,7 @@ It does not collect prompts, responses, source code, tool arguments, credentials
 screenshots, browser history, or raw command lines.
 NOTICE
   read -r -p "Continue? [y/N] " answer
-  [[ "$answer" =~ ^[Yy]$ ]] || { echo "Installation cancelled."; exit 0; }
+  [[ "$answer" =~ ^[Yy]$ ]] || { echo "Installation cancelled."; exit 1; }
 fi
 
 # bash -c/stdin has no script path. A local checkout installs directly;
@@ -133,16 +140,21 @@ for command in server agent hook adapters setup status uninstall mcp demo; do
 done
 
 echo "Configuring local services..."
-"$CLI" setup --root "$INSTALL_ROOT" "${SETUP_ARGS[@]}"
+"$CLI" setup "${SETUP_ARGS[@]}"
 
 PUBLIC="$(cat "$INSTALL_ROOT/cli-launcher.path")"
-RESOLVED="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lic 'command -v edgedisco' | /usr/bin/tail -n 1)"
+case "${SHELL:-/bin/zsh}" in
+  */bash) LOGIN_SHELL="${SHELL}" ;;
+  */zsh) LOGIN_SHELL="${SHELL}" ;;
+  *) echo "Unsupported login shell: ${SHELL}. EdgeDisco supports zsh and bash login shells." >&2; exit 1 ;;
+esac
+RESOLVED="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "$LOGIN_SHELL" -lic 'command -v edgedisco' | /usr/bin/tail -n 1)"
 if [[ "$RESOLVED" != "$PUBLIC" ]]; then
   echo "EdgeDisco installed, but a fresh interactive login shell resolves 'edgedisco' to '$RESOLVED' instead of '$PUBLIC'." >&2
   echo "Check command -v edgedisco and edgedisco --help before using the demo." >&2
   exit 1
 fi
-FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/zsh -lic 'edgedisco --help')"
+FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "$LOGIN_SHELL" -lic 'edgedisco --help')"
 if [[ "$FRESH_HELP" != *"demo"* ]]; then
   echo "A fresh login shell found an EdgeDisco command without the demo subcommand." >&2
   exit 1
@@ -163,3 +175,4 @@ Open a new Terminal window, then run:
 Configuration and logs:
   $INSTALL_ROOT
 EOF
+INSTALL_COMPLETE=true

@@ -111,6 +111,7 @@ class InstallerTests(unittest.TestCase):
                     if path.is_file() and "__pycache__" not in path.parts:
                         tar.add(path, arcname=f"edgedisco-main/{path.relative_to(REPO)}")
             port = _free_port()
+            (root / "server.env").write_text(f"EDGEDISCO_PORT={port}\n")
             env = dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(root),
                        EDGEDISCO_ARCHIVE_URL=archive.as_uri(),
                        VIRTUAL_ENV=str(unrelated),
@@ -120,13 +121,24 @@ class InstallerTests(unittest.TestCase):
             env.pop("PYTHON_BIN", None)
             env.pop("PYTHONPATH", None)
             try:
+                broken_script = SCRIPT.replace('SETUP_ARGS=(--root "$INSTALL_ROOT")', 'SETUP_ARGS=()')
+                self.assertNotEqual(broken_script, SCRIPT)
+                nounset = subprocess.run(
+                    ["/bin/bash", "-c", broken_script], env=env, input="y\n",
+                    capture_output=True, text=True, timeout=180,
+                )
+                self.assertNotEqual(nounset.returncode, 0)
+                self.assertIn("SETUP_ARGS[@]: unbound variable", nounset.stderr)
+                self.assertNotIn("EdgeDisco installation verified.", nounset.stdout)
+                self.assertIn("Bootstrapping pip", nounset.stdout)
+                self.assertFalse((root / "cli-launcher.path").exists())
+
                 remote = subprocess.run(
-                    ["/bin/bash", "-c", SCRIPT, "--", "--yes", "--no-open", "--port", str(port)],
-                    env=env, capture_output=True, text=True, timeout=180,
+                    ["/bin/bash", "-c", SCRIPT], env=env, input="y\n",
+                    capture_output=True, text=True, timeout=180,
                 )
                 self.assertEqual(remote.returncode, 0, remote.stderr)
-                self.assertIn("installation verified", remote.stdout)
-                self.assertIn("Bootstrapping pip", remote.stdout)
+                self.assertIn("EdgeDisco installation verified.", remote.stdout)
                 self.assertEqual(sentinel.read_text(), "untouched")
                 self.assertEqual(old_cli.read_text(), "#!/bin/sh\necho old-edgedisco\n")
                 self.assertEqual(evidence.read_text(), "preserve")
@@ -149,6 +161,20 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual((root / "cli-launcher.path").read_text().strip(),
                                  str(root / "bin/edgedisco"))
                 self.assertEqual(old_public.read_text(), "#!/bin/sh\necho another-old-edgedisco\n")
+                self.assertTrue((root / "bin/edgedisco").is_file())
+                self.assertTrue(os.access(root / "bin/edgedisco", os.X_OK))
+
+                # A shell alias can defeat PATH integration. The installer must
+                # report that verification failure with a nonzero status.
+                (home / ".zshrc").write_text("alias edgedisco='echo old-shadow'\n")
+                shadowed = subprocess.run(
+                    ["/bin/bash", "-c", SCRIPT, "--", "--yes", "--no-open"],
+                    env=env, capture_output=True, text=True, timeout=180,
+                )
+                self.assertNotEqual(shadowed.returncode, 0)
+                self.assertNotIn("EdgeDisco installation verified.", shadowed.stdout)
+                self.assertIn("fresh interactive login shell resolves", shadowed.stderr)
+                (home / ".zshrc").unlink()
 
                 demo = subprocess.run([str(managed), "demo"], env=env, capture_output=True,
                                       text=True, timeout=40)

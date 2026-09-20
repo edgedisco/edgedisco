@@ -129,11 +129,21 @@ def _path_block(local_bin: Path) -> str:
     )
 
 
+def _login_profile(home: Path) -> Path:
+    if Path(os.environ.get("SHELL", "/bin/zsh")).name == "bash":
+        for name in (".bash_profile", ".bash_login", ".profile"):
+            candidate = home / name
+            if candidate.exists():
+                return candidate
+        return home / ".bash_profile"
+    return home / ".zprofile"
+
+
 def ensure_local_bin_on_path(home: Path | None = None, local_bin: Path | None = None) -> Path:
-    """Idempotently ensure ``~/.local/bin`` is on PATH for new macOS login shells."""
+    """Idempotently add the managed bin to the user's login-shell PATH."""
     home = home or Path.home()
     local_bin = local_bin or (home / ".local" / "bin")
-    profile = home / ".zprofile"
+    profile = _login_profile(home)
     block = _path_block(local_bin)
     existing = profile.read_text(errors="replace") if profile.exists() else ""
     if PATH_MARKER_BEGIN in existing and PATH_MARKER_END in existing:
@@ -154,9 +164,15 @@ def ensure_local_bin_on_path(home: Path | None = None, local_bin: Path | None = 
 
 
 def remove_local_bin_path_block(home: Path | None = None) -> bool:
-    """Remove only the EdgeDisco-managed PATH block from ``~/.zprofile``."""
+    """Remove only EdgeDisco-managed blocks from supported login profiles."""
     home = home or Path.home()
-    profile = home / ".zprofile"
+    removed = False
+    for name in (".zprofile", ".bash_profile", ".bash_login", ".profile"):
+        removed = _remove_path_block(home / name) or removed
+    return removed
+
+
+def _remove_path_block(profile: Path) -> bool:
     if not profile.exists():
         return False
     existing = profile.read_text(errors="replace")

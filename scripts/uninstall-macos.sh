@@ -56,9 +56,10 @@ for public in candidates:
 managed.unlink(missing_ok=True)
 state.unlink(missing_ok=True)
 
-profile = home / ".zprofile"
 begin, end = "# >>> edgedisco PATH >>>", "# <<< edgedisco PATH <<<"
-if profile.exists():
+for profile in (home / ".zprofile", home / ".bash_profile", home / ".bash_login", home / ".profile"):
+    if not profile.exists():
+        continue
     text = profile.read_text(errors="replace")
     if begin in text and end in text:
         start = text.index(begin)

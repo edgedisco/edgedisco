@@ -1,5 +1,7 @@
 import json
+import os
 import plistlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -164,6 +166,24 @@ class CliLauncherTests(unittest.TestCase):
             profile = (home / ".zprofile").read_text()
             self.assertEqual(profile.count(PATH_MARKER_BEGIN), 1)
             self.assertEqual(profile.count(PATH_MARKER_END), 1)
+
+    @patch.dict(os.environ, {"SHELL": "/bin/bash"})
+    def test_bash_login_profile_resolves_and_uninstalls_launcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout, _cli = self._layout_with_fake_cli(home)
+            profile = home / ".bash_login"
+            profile.write_text("export TEST_KEEP=1\n")
+            launcher = install_cli_launcher(layout, home)
+            self.assertEqual(launcher.path_profile, profile)
+            self.assertFalse((home / ".zprofile").exists())
+            env = dict(os.environ, HOME=str(home), PATH="/usr/local/bin:/usr/bin:/bin")
+            resolved = subprocess.check_output(
+                ["/bin/bash", "-lic", "command -v edgedisco"], env=env, text=True,
+            ).strip()
+            self.assertEqual(resolved, str(launcher.public))
+            uninstall_cli_launcher(layout, home)
+            self.assertEqual(profile.read_text(), "export TEST_KEEP=1\n")
 
     def test_uninstall_removes_launcher_and_path_block_only(self):
         with tempfile.TemporaryDirectory() as temp:
