@@ -15,6 +15,7 @@ from typing import Any
 
 from . import __version__
 from .detector import collect_inventory, digest
+from .runtime import claim_spool, read_events, spool_path
 
 
 def _utc_now() -> str:
@@ -87,7 +88,27 @@ class AgentClient:
     def send_once(self) -> dict[str, Any]:
         if not self.config.get("device_token"):
             self.enroll()
-        return self._request("/api/v1/reports", self.scan_payload(), self.config["device_token"])
+        inventory = self._request("/api/v1/reports", self.scan_payload(), self.config["device_token"])
+        runtime_count = self.flush_runtime_events()
+        inventory["runtime_event_count"] = runtime_count
+        return inventory
+
+    def flush_runtime_events(self) -> int:
+        path = spool_path(self.config_path, self.config)
+        pending = claim_spool(path)
+        if pending is None:
+            return 0
+        events = read_events(pending)
+        if not events:
+            pending.unlink(missing_ok=True)
+            return 0
+        self._request(
+            "/api/v1/runtime-events",
+            {"schema_version": 1, "events": events},
+            self.config["device_token"],
+        )
+        pending.unlink(missing_ok=True)
+        return len(events)
 
     def run(self) -> None:
         interval = max(60, int(self.config.get("scan_interval_seconds", 300)))
@@ -95,7 +116,11 @@ class AgentClient:
         while True:
             try:
                 result = self.send_once()
-                print(f"inventory accepted: {result.get('asset_count', 0)} assets", flush=True)
+                print(
+                    f"inventory accepted: {result.get('asset_count', 0)} assets; "
+                    f"{result.get('runtime_event_count', 0)} runtime events",
+                    flush=True,
+                )
                 backoff = 5
                 time.sleep(interval)
             except Exception as exc:

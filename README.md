@@ -2,7 +2,9 @@
 
 Privacy-preserving endpoint discovery for local AI applications, agent frameworks, and MCP servers.
 
-AI Asset Inventory runs a lightweight collector on macOS, Windows, or Linux and sends sanitized inventory to a central compliance dashboard. It is designed to answer a basic enterprise question: **which AI tools and agents are present or running on company endpoints?**
+EdgeDisco is an open-source project created and owned by [Neeraj Sabharwal](https://www.linkedin.com/in/neerajsabharwal/). It is released under the Apache License 2.0.
+
+EdgeDisco runs a lightweight collector on macOS, Windows, or Linux and sends sanitized inventory and agent lifecycle evidence to a central compliance dashboard. It answers two enterprise questions: **which AI tools are present, and which agents are actually running inside them?**
 
 > Status: pilot-ready MVP. Review the [production hardening checklist](docs/production-hardening.md) before a broad enterprise rollout.
 
@@ -17,6 +19,8 @@ This project provides a focused inventory layer without collecting employee cont
 - Discovers supported AI desktop applications and local model runtimes
 - Detects supported AI and agent processes while they are running
 - Links active agent runtimes to the desktop tool that spawned them using local process lineage
+- Captures agent sessions, subagents, tool use, MCP use, status, model, and duration through native app hooks
+- Includes adapters for Cursor, Claude Code, and GitHub Copilot plus a generic Python SDK
 - Inventories MCP server names, transport types, and executable basenames
 - Records first seen, last seen, device, OS, vendor, type, and running state
 - Provides a centralized dashboard and CSV evidence export
@@ -25,7 +29,7 @@ This project provides a focused inventory layer without collecting employee cont
 
 Current signatures include ChatGPT, Claude, Cursor, GitHub Copilot, Windsurf, Ollama, LM Studio, Jan, AnythingLLM, Open WebUI, LocalAI, Dify, CrewAI, AutoGen, LangGraph/LangChain, and MCP servers.
 
-For active agent runtimes, the inventory reports the framework, host application, runtime executable, relationship, and aggregated instance count. It does not send process IDs or raw arguments.
+For active agent runtimes, the inventory reports the framework, host application, runtime executable, relationship, and aggregated instance count. Native hook adapters add session and tool lifecycle evidence without sending hook payloads, process IDs, prompts, responses, code, tool arguments, or raw commands.
 
 ## Privacy boundary
 
@@ -43,7 +47,8 @@ Paths and sanitized command structures are converted to SHA-256 fingerprints on 
 
 ```mermaid
 flowchart LR
-  A[Endpoint collector] -->|TLS and device token| B[Inventory API]
+  H[App hooks and SDK] --> A[Endpoint collector]
+  A -->|TLS and device token| B[Inventory API]
   B --> C[(SQLite evidence store)]
   C --> D[Compliance dashboard]
   C --> E[CSV export]
@@ -60,7 +65,46 @@ See [Architecture](docs/architecture.md) for the data flow and trust boundaries.
 - Permission to list local processes
 - HTTPS ingress for any non-local deployment
 
-## Quick start from source
+## Self-service install on macOS
+
+The recommended installer creates an isolated environment under `~/.edgedisco`, generates and stores the required credentials, enrolls the Mac, installs adapters for detected AI applications, starts the server and collector at login, and opens the dashboard.
+
+Download and inspect the installer, then run it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
+less install.sh
+bash install.sh
+```
+
+For a disposable evaluation Mac, the same installer can be run directly:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh)"
+```
+
+No `sudo` is required. When setup finishes, the terminal prints the local dashboard address and its administrator token. To check the installation later:
+
+```bash
+~/.edgedisco/venv/bin/edgedisco status
+```
+
+To display the administrator token again:
+
+```bash
+source ~/.edgedisco/server.env
+echo "$AAI_ADMIN_TOKEN"
+```
+
+Rerun `bash install.sh` to upgrade or repair the installation. Remove the background services while retaining local evidence with:
+
+```bash
+~/.edgedisco/venv/bin/edgedisco uninstall
+```
+
+Add `--purge` only when you also want to delete credentials, logs, configuration, and collected evidence. See the [macOS self-service guide](docs/deployment-macos.md) for testing and troubleshooting.
+
+## Developer setup from source
 
 Clone the repository and create an isolated environment:
 
@@ -77,6 +121,12 @@ Generate two different server credentials:
 ```bash
 export AAI_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export AAI_ENROLLMENT_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+umask 077
+printf 'export AAI_ADMIN_TOKEN=%s\nexport AAI_ENROLLMENT_TOKEN=%s\n' \
+  "$AAI_ADMIN_TOKEN" "$AAI_ENROLLMENT_TOKEN" > server.env
+
+echo "Dashboard admin token: $AAI_ADMIN_TOKEN"
 ```
 
 Start the central server:
@@ -91,31 +141,56 @@ The server refuses credentials shorter than 24 characters or identical administr
 
 ## Configure an endpoint
 
-Copy the example configuration:
+In a second terminal, load the same enrollment credential and create the endpoint configuration:
 
 ```bash
-cp config/agent.example.json agent.json
+cd edgedisco
+. .venv/bin/activate
+source server.env
+cat > agent.json <<EOF
+{
+  "server_url": "http://127.0.0.1:8080",
+  "enrollment_token": "$AAI_ENROLLMENT_TOKEN",
+  "scan_interval_seconds": 300
+}
+EOF
 chmod 600 agent.json
 ```
 
-Update `server_url` and `enrollment_token`, then preview the local inventory:
+Preview, enroll, and send the first report:
 
 ```bash
 ai-inventory agent scan --config agent.json
+ai-inventory agent enroll --config agent.json
+ai-inventory agent send --config agent.json
 ```
 
-Inspect the JSON before uploading anything. Then enroll and begin continuous collection:
+Install runtime adapters for the apps present on the endpoint:
 
 ```bash
-ai-inventory agent enroll --config agent.json
+ai-inventory adapters install --config "$(pwd)/agent.json" \
+  --apps cursor claude-code github-copilot
+```
+
+Restart or reload the relevant application, run an agent task, then send the captured runtime events:
+
+```bash
+ai-inventory agent send --config agent.json
+```
+
+For continuous inventory and runtime-event forwarding:
+
+```bash
 ai-inventory agent run --config agent.json
 ```
 
 After enrollment, the shared enrollment credential is removed from the configuration and replaced with a unique `device_id` and `device_token`.
 
-## macOS deployment
+See [Runtime adapters](docs/runtime-adapters.md) for app-specific details and the generic SDK.
 
-For a complete local installation, background service setup, verification, logs, and removal instructions, see [Deploy on macOS](docs/deployment-macos.md).
+## Managed deployment
+
+For self-service testing and managed macOS deployment guidance, see [Deploy on macOS](docs/deployment-macos.md).
 
 Other deployment assets:
 
@@ -139,8 +214,10 @@ The included Compose configuration binds the server to localhost. Put it behind 
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/enroll` | Enrollment token | Create a device identity |
 | `POST` | `/api/v1/reports` | Device token | Upload sanitized inventory |
+| `POST` | `/api/v1/runtime-events` | Device token | Upload sanitized agent lifecycle events |
 | `GET` | `/api/v1/summary` | Admin token or session | Read fleet inventory |
 | `GET` | `/api/v1/export.csv` | Admin token or session | Export compliance evidence |
+| `GET` | `/api/v1/agent-sessions.csv` | Admin token or session | Export agent-session evidence |
 | `GET` | `/healthz` | None | Health check |
 
 For API access, pass `Authorization: Bearer <token>`.
@@ -164,11 +241,11 @@ The GitHub Actions workflow runs the test suite on Python 3.9 through 3.13. See 
 ## Current limitations
 
 - Ordinary browser-tab usage is not detected. That requires an approved browser extension, DNS/SWG telemetry, or browser-management integration.
-- Agents that execute entirely inside a SaaS control plane are not visible to an endpoint process collector and require that platform's audit or inventory API.
+- Agents that execute entirely inside a SaaS control plane are not visible to endpoint hooks and require that platform's audit or inventory API.
 - The central server uses SQLite and one administrator role.
 - Automated retention, device-token revocation, and SSO are not implemented.
 - Detection is signature-based and should be aligned with the organization's approved and prohibited application catalog.
-- Native signed installers are not included in this MVP.
+- A native signed installer is not included; the macOS self-service installer is a reviewable shell script.
 
 ## Responsible deployment
 

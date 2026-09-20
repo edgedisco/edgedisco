@@ -1,95 +1,132 @@
 # Deploy on macOS
 
-This guide runs both the server and collector on one Mac for evaluation. A production rollout should host the server centrally behind HTTPS and install only the collector on endpoints.
+This guide runs the EdgeDisco server and collector on one Mac for evaluation. A production rollout should host the server centrally behind HTTPS and install only the collector on managed endpoints.
 
-## Install from a clone
+## Self-service installation
+
+Requirements:
+
+- macOS 12 or newer
+- Python 3.9 or newer
+- An internet connection for the initial install
+
+Download, inspect, and run the installer:
 
 ```bash
-git clone https://github.com/nsabharwal/edgedisco.git
-cd edgedisco
-python3 -m venv "$HOME/AIInventory/venv"
-"$HOME/AIInventory/venv/bin/python" -m pip install .
-mkdir -p "$HOME/AIInventory/data" "$HOME/AIInventory/config" "$HOME/AIInventory/logs"
+curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
+less install.sh
+bash install.sh
 ```
 
-Verify the installed version:
+The installer does not use `sudo`. It:
+
+1. Creates `~/.edgedisco/venv` and installs EdgeDisco there.
+2. Generates distinct administrator and enrollment credentials.
+3. Starts a local server on `127.0.0.1:8080`.
+4. Enrolls the Mac and sends its first sanitized inventory report.
+5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot installations.
+6. Creates per-user LaunchAgents for the server and collector.
+7. Opens the dashboard and prints its administrator token.
+
+The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
+
+Use another local port if 8080 is already assigned:
 
 ```bash
-"$HOME/AIInventory/venv/bin/python" -c "import ai_asset_inventory; print(ai_asset_inventory.__version__)"
+bash install.sh --port 8090
 ```
 
-## Start the local server
+Install every supported adapter, including apps that are not currently detected:
 
 ```bash
-ADMIN_TOKEN=$(openssl rand -hex 32)
-ENROLL_TOKEN=$(openssl rand -hex 32)
-umask 077
-printf 'export AAI_ADMIN_TOKEN=%s\nexport AAI_ENROLLMENT_TOKEN=%s\n' \
-  "$ADMIN_TOKEN" "$ENROLL_TOKEN" > "$HOME/AIInventory/server.env"
-chmod 600 "$HOME/AIInventory/server.env"
-
-source "$HOME/AIInventory/server.env"
-nohup env AAI_ADMIN_TOKEN="$AAI_ADMIN_TOKEN" AAI_ENROLLMENT_TOKEN="$AAI_ENROLLMENT_TOKEN" \
-  "$HOME/AIInventory/venv/bin/ai-inventory" server \
-  --host 127.0.0.1 --port 8080 --db "$HOME/AIInventory/data/inventory.db" \
-  > "$HOME/AIInventory/logs/server.log" 2>&1 &
-echo $! > "$HOME/AIInventory/server.pid"
+bash install.sh --all-adapters
 ```
 
-Verify the service:
+For unattended test machines, review the script first and then pass `--yes --no-open`.
+
+## Verify the installation
 
 ```bash
+~/.edgedisco/venv/bin/edgedisco status
 curl http://127.0.0.1:8080/healthz
 ```
 
-## Configure the collector
+The status output should show `Server: healthy` and `Endpoint: enrolled`. Open `http://127.0.0.1:8080` and sign in with:
 
 ```bash
-source "$HOME/AIInventory/server.env"
-cat > "$HOME/AIInventory/config/agent.json" <<EOF
-{
-  "server_url": "http://127.0.0.1:8080",
-  "enrollment_token": "$AAI_ENROLLMENT_TOKEN",
-  "scan_interval_seconds": 300
-}
-EOF
-chmod 600 "$HOME/AIInventory/config/agent.json"
-```
-
-Preview, enroll, and start:
-
-```bash
-"$HOME/AIInventory/venv/bin/ai-inventory" agent scan \
-  --config "$HOME/AIInventory/config/agent.json"
-
-"$HOME/AIInventory/venv/bin/ai-inventory" agent enroll \
-  --config "$HOME/AIInventory/config/agent.json"
-
-nohup "$HOME/AIInventory/venv/bin/ai-inventory" agent run \
-  --config "$HOME/AIInventory/config/agent.json" \
-  > "$HOME/AIInventory/logs/agent.log" 2>&1 &
-echo $! > "$HOME/AIInventory/agent.pid"
-```
-
-Open `http://127.0.0.1:8080` and sign in with the administrator token:
-
-```bash
-source "$HOME/AIInventory/server.env"
+source ~/.edgedisco/server.env
 echo "$AAI_ADMIN_TOKEN"
 ```
 
-## Logs and lifecycle
+Start an agent task in Cursor, Claude Code, or GitHub Copilot. Then wait for the collector cycle or send immediately:
 
 ```bash
-tail -f "$HOME/AIInventory/logs/server.log"
-tail -f "$HOME/AIInventory/logs/agent.log"
+~/.edgedisco/venv/bin/edgedisco agent send \
+  --config ~/.edgedisco/agent.json
 ```
 
-Stop the evaluation processes:
+Refresh the dashboard. The active agent or recent session should appear when the application emits a supported lifecycle hook. Application inventory alone does not prove an agent ran; session evidence comes from the adapters.
+
+## Logs and files
+
+| Location | Purpose |
+| --- | --- |
+| `~/.edgedisco/server.env` | Local server credentials |
+| `~/.edgedisco/agent.json` | Enrolled endpoint configuration |
+| `~/.edgedisco/data/inventory.db` | Local compliance evidence |
+| `~/.edgedisco/logs/server.log` | Server standard output |
+| `~/.edgedisco/logs/server.err.log` | Server errors |
+| `~/.edgedisco/logs/agent.log` | Collector standard output |
+| `~/.edgedisco/logs/agent.err.log` | Collector errors |
+
+Follow the logs:
 
 ```bash
-kill "$(cat "$HOME/AIInventory/agent.pid")"
-kill "$(cat "$HOME/AIInventory/server.pid")"
+tail -f ~/.edgedisco/logs/server.err.log
+tail -f ~/.edgedisco/logs/agent.err.log
 ```
 
-For managed endpoints, adapt `deploy/com.trust3.ai-inventory.plist`, install it through MDM, and protect both the configuration and logs with the intended service identity.
+## Upgrade or repair
+
+Download the current installer and run it again. Existing credentials, enrollment, and evidence are preserved.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/nsabharwal/edgedisco/main/install.sh
+bash install.sh
+```
+
+## Uninstall
+
+Stop and remove the background services while keeping the local data:
+
+```bash
+~/.edgedisco/venv/bin/edgedisco uninstall
+```
+
+Delete the local credentials, logs, configuration, and evidence as well:
+
+```bash
+~/.edgedisco/venv/bin/edgedisco uninstall --purge
+```
+
+The purge command asks for confirmation. The noninteractive equivalent is `--purge --yes`.
+
+## Troubleshooting
+
+If setup reports that port 8080 uses different credentials, either stop the old service or choose another port:
+
+```bash
+bash install.sh --port 8090
+```
+
+If no agent sessions appear:
+
+1. Confirm the app is listed under `Detected adapters` during setup.
+2. Restart the app after adapter installation.
+3. Run a new agent task, not only a normal chat.
+4. Send events immediately with `edgedisco agent send`.
+5. Check `~/.edgedisco/logs/agent.err.log`.
+
+## Managed enterprise rollout
+
+The self-service mode is intended for a local evaluation. For managed endpoints, host the API behind HTTPS, provision only endpoint configuration through MDM, use an appropriate service identity, define retention and access controls, and complete the [production hardening checklist](production-hardening.md). The example `deploy/com.trust3.ai-inventory.plist` can be adapted for that model.

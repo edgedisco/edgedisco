@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_asset_inventory.database import Database
+from ai_asset_inventory.database import Database, utc_now
 
 
 class DatabaseTests(unittest.TestCase):
@@ -27,6 +27,24 @@ class DatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             db = Database(Path(temp) / "test.db")
             self.assertIsNone(db.device_for_token("wrong"))
+
+    def test_runtime_events_create_agent_session(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Database(Path(temp) / "test.db")
+            device_id, _ = db.enroll({"hostname": "mac-01", "os": "Darwin"})
+            event = {
+                "event_id": "event-1", "observed_at": utc_now(),
+                "app": "cursor", "event_type": "postToolUse", "session_hash": "session",
+                "agent_hash": "root", "agent_type": "coding", "tool_name": "Shell",
+                "mcp_server": None, "model": "model", "status": "active",
+                "duration_ms": 5, "workspace_hash": "workspace", "user_hash": "user",
+                "metadata": {"source_event": "postToolUse"},
+            }
+            self.assertEqual(db.ingest_runtime_events(device_id, [event]), 1)
+            self.assertEqual(db.ingest_runtime_events(device_id, [event]), 0)
+            summary = db.summary()
+            self.assertEqual(summary["active_sessions"], 1)
+            self.assertEqual(summary["session_items"][0]["tool_count"], 1)
 
 
 if __name__ == "__main__":

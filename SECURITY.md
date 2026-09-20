@@ -9,7 +9,7 @@
 
 ## Data minimization
 
-Raw command lines and file paths never leave the endpoint. Sensitive command argument values are redacted before the remaining command structure is hashed. MCP environment variables, arguments, headers, and URLs are not collected. Content inspection is outside this utility's scope.
+Raw command lines and file paths never leave the endpoint. Sensitive command argument values are redacted before the remaining command structure is hashed. MCP environment variables, arguments, headers, and URLs are not collected. Runtime adapters use an explicit allowlist and discard prompts, responses, source code, tool input and output, transcripts, credentials, email addresses, and raw workspace paths before spooling. The server independently rejects fields outside the normalized event schema. Content inspection is outside this utility's scope.
 
 ## Known gaps before production
 

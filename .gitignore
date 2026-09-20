@@ -7,3 +7,11 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+.DS_Store
+server.env
+agent.json
+runtime-events.jsonl*
+data/
+logs/
+*.pid
+.edgedisco/

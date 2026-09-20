@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .database import Database
+from .runtime import validate_normalized_event
 
 
 class InventoryServer(ThreadingHTTPServer):
@@ -93,6 +94,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/v1/agent-sessions.csv":
+            if not self._admin():
+                return self._json(401, {"error": "unauthorized"})
+            body = self.server.database.export_agent_sessions_csv().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", "attachment; filename=edgedisco-agent-sessions.csv")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/":
             body = files("ai_asset_inventory").joinpath("dashboard.html").read_bytes()
             self.send_response(200)
@@ -134,6 +145,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._validate_report(payload)
                 count = self.server.database.ingest(device["id"], payload)
                 return self._json(202, {"status": "accepted", "asset_count": count})
+            if path == "/api/v1/runtime-events":
+                device = self.server.database.device_for_token(self._bearer())
+                if not device:
+                    return self._json(401, {"error": "invalid device token"})
+                payload = json.loads(self._body())
+                events = payload.get("events")
+                if not isinstance(events, list) or len(events) > 1000:
+                    raise ValueError("events must be a list with at most 1000 entries")
+                for event in events:
+                    if not isinstance(event, dict):
+                        raise ValueError("each runtime event must be an object")
+                    validate_normalized_event(event)
+                count = self.server.database.ingest_runtime_events(device["id"], events)
+                return self._json(202, {"status": "accepted", "runtime_event_count": count})
             self._json(404, {"error": "not found"})
         except (ValueError, KeyError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)})

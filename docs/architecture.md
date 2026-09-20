@@ -4,7 +4,11 @@
 
 ### Endpoint collector
 
-The collector performs an allowlisted scan of local process metadata, parent-child process lineage, installed application metadata, and supported MCP configuration locations. It links recognized agent runtimes to the AI tool that spawned them and aggregates concurrent instances. It converts sensitive location and command information into fingerprints before constructing a report.
+The collector performs an allowlisted scan of local process metadata, parent-child process lineage, installed application metadata, and supported MCP configuration locations. Native app hooks write sanitized agent lifecycle events to a locked local spool. The collector forwards inventory and runtime batches independently, allowing hooks to remain fast and fail-open when the network is unavailable.
+
+### Runtime adapters
+
+Cursor, Claude Code, and GitHub Copilot adapters merge EdgeDisco commands into their documented hook configuration without removing existing hooks. A generic Python SDK instruments custom runtimes. Adapters normalize each vendor payload locally and discard prompts, responses, code, tool arguments, output, transcript paths, email addresses, and raw workspace paths.
 
 ### Enrollment API
 
@@ -27,12 +31,15 @@ Administrators authenticate with a separate credential. The dashboard shows flee
 ```mermaid
 sequenceDiagram
   participant E as Endpoint
+  participant H as App hook
   participant API as Inventory API
   participant DB as Evidence store
   participant A as Administrator
   E->>API: Enroll with shared credential
   API-->>E: Device ID and upload token
+  H->>E: Sanitized lifecycle metadata
   E->>API: Sanitized inventory report
+  E->>API: Batched runtime events
   API->>DB: Scan and asset state
   A->>API: Authenticated dashboard request
   API->>DB: Read fleet evidence
@@ -50,11 +57,14 @@ sequenceDiagram
 | Command | Sanitized command structure | SHA-256 fingerprint only |
 | MCP | Server name, owner application, transport, executable basename | Arguments, environment, headers, and URLs excluded |
 | Agent runtime | Framework, host app, runtime basename, relationship, instance count | Process IDs and raw arguments excluded |
+| Agent session | App, hashed session and agent IDs, agent type, model, status, duration | Prompt, response, code, transcript, and raw identity excluded |
+| Tool event | Tool name, MCP server name, success/failure, duration | Tool input and output excluded |
 
 ## Trust boundaries
 
 - Endpoint reports are authenticated but remain untrusted input.
 - The API validates shape, field presence, types, and asset count.
+- Runtime ingestion rejects fields outside its explicit metadata allowlist.
 - TLS termination is required outside localhost.
 - Administrator access is independent from endpoint upload access.
 - The database and backups contain compliance evidence and require restricted access.
