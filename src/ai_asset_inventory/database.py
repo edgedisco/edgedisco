@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .otlp_events import project_asset
-from .validation import timestamp
+from .validation import timestamp, observation_timestamp
 
 OTLP_MAX_PENDING = 5_000
 OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
@@ -22,8 +22,10 @@ DATABASE_VERSION = 2
 # Runtime uploads do not establish process-inventory freshness.
 FRESH_SCAN = """EXISTS (SELECT 1 FROM scans fresh WHERE fresh.device_id=a.device_id
     AND julianday(fresh.received_at)>=julianday('now','-15 minutes')
+    AND julianday(fresh.observed_at)<=julianday(fresh.received_at,'+5 minutes')
     AND NOT EXISTS (SELECT 1 FROM scans newer WHERE newer.device_id=a.device_id
-        AND newer.observed_at>fresh.observed_at))"""
+        AND newer.observed_at>fresh.observed_at
+        AND julianday(newer.observed_at)<=julianday(newer.received_at,'+5 minutes')))"""
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -169,7 +171,7 @@ class Database:
             return conn.execute("SELECT * FROM devices WHERE token_hash=?", (token_hash(token),)).fetchone()
 
     def ingest(self, device_id: str, report: dict[str, Any]) -> int:
-        observed_at = timestamp(report["observed_at"])
+        observed_at = observation_timestamp(report["observed_at"])
         received_at = utc_now()
         scan_id = str(report["scan_id"])
         assets = report.get("assets", [])
@@ -182,7 +184,8 @@ class Database:
                 if existing["device_id"] != device_id:
                     raise ValueError("scan ID already belongs to another device")
                 return int(existing["asset_count"])
-            newer = conn.execute("SELECT 1 FROM scans WHERE device_id=? AND observed_at>? LIMIT 1",
+            newer = conn.execute("SELECT 1 FROM scans WHERE device_id=? AND observed_at>? "
+                                 "AND julianday(observed_at)<=julianday(received_at,'+5 minutes') LIMIT 1",
                                  (device_id, observed_at)).fetchone()
             conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (received_at, device_id))
             conn.execute(

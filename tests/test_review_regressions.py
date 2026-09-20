@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,6 +31,23 @@ class ReviewRegressions(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.db = Database(self.root / "inventory.db", otlp_enabled=True)
         self.device, _ = self.db.enroll({"hostname": "test", "os": "Linux"})
+
+    def test_future_observations_are_rejected_and_legacy_poison_does_not_block_scans(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+        poisoned = report("future", [asset()], future)
+        with self.assertRaises(ValueError):
+            RequestHandler._validate_report(poisoned)
+        with self.assertRaises(ValueError):
+            self.db.ingest(self.device, poisoned)
+        self.db.ingest(self.device, report("legacy", [asset()]))
+        with self.db.connect() as conn:
+            conn.execute("UPDATE scans SET observed_at=? WHERE id='legacy'", (future,))
+            conn.execute("UPDATE assets SET last_seen=?", (future,))
+        self.db.ingest(self.device, report("recovered", []))
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT running FROM assets").fetchone()[0], 0)
+        self.db.ingest(self.device, report("current", [asset()]))
+        self.assertEqual(self.db.summary()["running"], 1)
 
     def test_large_spool_retries_without_losing_events_or_new_writes(self):
         config = self.root / "agent.json"

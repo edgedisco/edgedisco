@@ -1,5 +1,5 @@
 """Validation at the authenticated, but untrusted, endpoint boundary."""
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
 
 
@@ -18,6 +18,13 @@ def timestamp(value):
 def _object(value, allowed, label):
     if not isinstance(value, dict) or set(value) - set(allowed):
         raise ValueError(f"unsupported {label} fields")
+
+
+def observation_timestamp(value):
+    normalized = timestamp(value)
+    if datetime.fromisoformat(normalized) > datetime.now(timezone.utc) + timedelta(minutes=5):
+        raise ValueError("observation timestamp exceeds permitted clock skew (5 minutes)")
+    return normalized
 
 
 def _string(value, limit, label):
@@ -41,7 +48,7 @@ def validate_report(payload):
     if type(schema_version) is not int or schema_version not in {1, 2}:
         raise ValueError("unsupported schema version")
     _string(payload["scan_id"], 128, "scan ID")
-    timestamp(payload["observed_at"])
+    observation_timestamp(payload["observed_at"])
     validate_device(payload["device"])
     privacy = payload["privacy"]
     expected = {"content_captured": False, "secrets_captured": False, "paths_hashed": True, "command_lines_hashed": True}
