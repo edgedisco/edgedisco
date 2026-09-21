@@ -22,7 +22,7 @@ All notable project changes are documented here.
 - Added complete MCP snapshot/change synchronization for sanitized MCP configuration records and a separate paginated device-freshness feed.
 - Corrected effective stale-session filtering, VS Code's `servers` configuration schema, simulation labeling, and failed-call auditing.
 - Marked every MCP tool with read-only, non-destructive, closed-world protocol hints and added real MCP/OTLP dependency coverage in CI.
-- Added OTLP version state changes and distinct inventory-observation and server-receipt timestamps while documenting that collector network delivery is not implemented yet.
+- Added OTLP version state changes and distinct inventory-observation and server-receipt timestamps, plus an implementation-ready HTTP/protobuf exporter specification aligned with the reference `otel-stack` collector.
 
 ## 0.4.0
 

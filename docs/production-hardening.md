@@ -57,5 +57,6 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Define MCP change-log and audit-log retention, cursor expiry, resnapshot procedures, and rotation.
 - Do not treat the OTLP outbox and encoder as collector delivery. Before enabling OTLP network
   export, implement and test worker claiming, TLS/authentication, timeouts, partial success,
-  retry/backoff, crash recovery, delivered-row retention, and queue health monitoring.
+  retry/backoff, crash recovery, delivered-row retention, and queue health monitoring according to
+  the [exporter specification](otel-integration.md#exporter-specification).
 - Run an independent security review before production approval.
