@@ -199,7 +199,17 @@ PY
 
 if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
   echo "Bootstrapping pip inside the EdgeDisco managed venv..."
-  if ! "$VENV_PYTHON" -m ensurepip --upgrade; then
+  NEED_PIP_BOOTSTRAP=false
+  if "$VENV_PYTHON" -c 'import ensurepip' >/dev/null 2>&1; then
+    if ! "$VENV_PYTHON" -m ensurepip --upgrade; then
+      echo "Python ensurepip failed; downloading the official pip bootstrap."
+      NEED_PIP_BOOTSTRAP=true
+    fi
+  else
+    echo "Python ensurepip is unavailable; downloading the official pip bootstrap."
+    NEED_PIP_BOOTSTRAP=true
+  fi
+  if [[ "$NEED_PIP_BOOTSTRAP" == true ]]; then
     /usr/bin/curl -fsSL --retry 3 https://bootstrap.pypa.io/get-pip.py -o "$TEMP_DIR/get-pip.py"
     "$VENV_PYTHON" "$TEMP_DIR/get-pip.py"
   fi
