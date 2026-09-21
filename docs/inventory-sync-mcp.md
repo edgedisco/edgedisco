@@ -6,12 +6,37 @@ environment values, command arguments, configuration URLs, or raw filesystem pat
 
 ## Install and run
 
-MCP support requires Python 3.10 or newer and the optional dependency:
+MCP support requires Python 3.10 or newer. Choose the installation path that matches how
+EdgeDisco was installed.
+
+### Self-service installation
+
+The self-service installer creates `~/.edgedisco/venv`, installs the `mcp` extra, and places an
+`edgedisco` launcher in `~/.local/bin`. Do not activate that virtual environment. After the
+installer has completed, run this command from any directory:
 
 ```shell
-python -m pip install 'ai-asset-inventory[mcp]'
 edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
 ```
+
+### Source checkout
+
+For a checkout, run the local-extra install from the repository root. The `.[mcp]` form means
+“this checkout plus its MCP extra”; it is different from installing the package name from an
+index. The virtual environment may be activated, or its Python can be called explicitly:
+
+```shell
+cd /path/to/edgedisco
+python3 --version  # must report 3.10 or newer
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[mcp]'
+edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
+```
+
+Without activation, use `.venv/bin/python -m pip` for installation and `.venv/bin/edgedisco` to
+run the server. The package-name form, `python -m pip install 'ai-asset-inventory[mcp]'`, works
+from any directory only when that package is available from the configured package index.
 
 The Streamable HTTP endpoint is `http://127.0.0.1:8081/mcp`. The service is stateless and returns
 JSON responses. `--audit-log` selects a JSON Lines audit file; otherwise EdgeDisco writes

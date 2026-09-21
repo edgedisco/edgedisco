@@ -139,6 +139,10 @@ With the Docker Compose stack in `../otel-stack` running, use its collector endp
 **4318**. Port **3001** is Grafana; it is not the ingestion endpoint.
 
 ```sh
+# From an EdgeDisco source checkout:
+cd /path/to/edgedisco
+python3 -m venv .venv
+. .venv/bin/activate
 python -m pip install -e '.[otlp]'
 export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
 export EDGEDISCO_OTLP_EXPORT_ENABLED=true

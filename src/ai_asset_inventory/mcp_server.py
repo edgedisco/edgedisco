@@ -44,8 +44,9 @@ def create_server(db_path: Path, audit_path: Path | None = None):
         from mcp.server import MCPServer
     except ImportError as exc:
         raise RuntimeError(
-            "MCP support requires Python 3.10+ and the optional dependency: "
-            "python -m pip install 'ai-asset-inventory[mcp]'"
+            "MCP support requires Python 3.10+ and the optional mcp dependency. "
+            "Managed installs include it; from a source checkout, run "
+            "python -m pip install -e '.[mcp]' from the repository root."
         ) from exc
 
     database = Database(db_path)

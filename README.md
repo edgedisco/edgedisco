@@ -95,7 +95,18 @@ python -m pip install -e .
 make test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. The core supports Python 3.9+; the optional MCP component requires Python 3.10+ and the `mcp` extra.
+The command above installs the core package only. To work on the optional integrations, install
+their extras from the repository root:
+
+```bash
+python -m pip install -e '.[mcp,otlp]'
+```
+
+The `mcp` extra requires Python 3.10+. If you use the self-service installer, it creates and uses
+its own per-user virtual environment and installs the optional integrations supported by that
+Python version; you do not need to activate that environment, and the `edgedisco` command works
+from any directory. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. The core supports Python 3.9+.
 
 To test the managed installation flow with uncommitted local changes, run `bash ./install.sh` from the checkout. The installer prints the checkout path, installs that source directly, replaces a same-version managed package, and performs an immediate inventory upload. An installer executed through stdin has no checkout path and downloads the configured source archive instead.
 
