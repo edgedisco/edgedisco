@@ -76,18 +76,28 @@ def create_server(db_path: Path, audit_path: Path | None = None):
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def get_compliance_summary() -> dict[str, int]:
-        """Return fleet-level counts for devices, AI assets, agents, sessions, and MCP servers."""
+        """Return counts for enrolled devices, assets, running agents, sessions, and MCP servers.
+
+        Counts are aggregate metadata only; call a list or synchronization tool for records.
+        """
         return audited("get_compliance_summary", {}, database.compliance_counts)
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_devices(limit: int = 100) -> list[dict[str, Any]]:
-        """List enrolled devices and their last-seen metadata. Maximum 500 records."""
+        """List enrolled devices with hostname, platform, enrollment, and last-seen metadata.
+
+        ``limit`` defaults to 100 and is capped at 500 records.
+        """
         return audited("list_devices", {"limit": limit}, lambda: database.list_devices(limit))
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_ai_assets(kind: str | None = None, running_only: bool = False,
                        limit: int = 100) -> list[dict[str, Any]]:
-        """List sanitized AI asset inventory, optionally filtered by type or running state."""
+        """List sanitized AI assets, optionally filtered by kind or fresh running state.
+
+        Kinds include ``application``, ``process``, ``agent_runtime``, and ``mcp_server``.
+        ``limit`` defaults to 100 and is capped at 500; running state is fresh-scan aware.
+        """
         arguments = {"kind": kind, "running_only": running_only, "limit": limit}
         return audited(
             "list_ai_assets", arguments,
@@ -96,7 +106,10 @@ def create_server(db_path: Path, audit_path: Path | None = None):
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_running_agents(limit: int = 100) -> list[dict[str, Any]]:
-        """List currently observed agent runtimes and their host-device metadata."""
+        """List agent runtimes observed in a fresh inventory scan, with host-device metadata.
+
+        ``limit`` defaults to 100 and is capped at 500 records.
+        """
         return audited(
             "list_running_agents", {"limit": limit},
             lambda: database.list_assets(kind="agent_runtime", running_only=True, limit=limit),
@@ -105,7 +118,12 @@ def create_server(db_path: Path, audit_path: Path | None = None):
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_agent_sessions(status: str | None = None, app: str | None = None,
                             limit: int = 100) -> list[dict[str, Any]]:
-        """List sanitized agent sessions, optionally filtered by status or host application."""
+        """List sanitized agent sessions, optionally filtered by status or host application.
+
+        Status values are ``pending``, ``active``, ``completed``, ``failed``, ``idle``, or the
+        derived ``stale`` value for an active session unseen for 15 minutes. ``limit`` defaults
+        to 100 and is capped at 500 records.
+        """
         arguments = {"status": status, "app": app, "limit": limit}
         return audited(
             "list_agent_sessions", arguments,
@@ -114,7 +132,11 @@ def create_server(db_path: Path, audit_path: Path | None = None):
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_mcp_servers(limit: int = 100) -> list[dict[str, Any]]:
-        """List discovered MCP servers without arguments, environment values, or credentials."""
+        """List discovered MCP servers and safe identity metadata.
+
+        Arguments, environment values, credentials, URLs, commands, and filesystem paths are
+        excluded. ``limit`` defaults to 100 and is capped at 500 records.
+        """
         return audited(
             "list_mcp_servers", {"limit": limit},
             lambda: database.list_assets(kind="mcp_server", limit=limit),
@@ -122,7 +144,11 @@ def create_server(db_path: Path, audit_path: Path | None = None):
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def inventory_device_status(after: str = "", limit: int = 100) -> dict[str, Any]:
-        """Page inventory-report freshness by device ID. Maximum 500 records per page."""
+        """Page inventory-report freshness by stable device ID.
+
+        Start with an empty ``after`` value, then pass ``next_after`` until it is null. Each page
+        contains at most 500 records and reports the latest receipt time and 15-minute freshness.
+        """
         arguments = {"after": after, "limit": limit}
         return audited(
             "inventory_device_status", arguments,
@@ -132,7 +158,12 @@ def create_server(db_path: Path, audit_path: Path | None = None):
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def inventory_snapshot(watermark: int | None = None, after: str = "",
                            limit: int = 100) -> dict[str, Any]:
-        """Page through privacy-safe assets. Reuse watermark on every page."""
+        """Read a consistent, privacy-safe asset snapshot page.
+
+        Start without ``watermark`` or ``after``. Reuse the returned ``watermark`` and pass
+        ``next_after`` as ``after`` until it is null; then consume changes after that watermark.
+        Each page contains at most 500 records.
+        """
         arguments = {"watermark": watermark, "after": after, "limit": limit}
 
         def operation() -> dict[str, Any]:
@@ -143,7 +174,11 @@ def create_server(db_path: Path, audit_path: Path | None = None):
 
     @mcp.tool(annotations=READ_ONLY_TOOL)
     def inventory_changes(cursor: int = 0, limit: int = 100) -> dict[str, Any]:
-        """Read ordered asset upserts and deletions after a cursor."""
+        """Read ordered asset upserts and deletions after a change-feed cursor.
+
+        Start with the completed snapshot's watermark, persist ``next_cursor``, and continue
+        while ``has_more`` is true. Each page contains at most 500 changes.
+        """
         arguments = {"cursor": cursor, "limit": limit}
 
         def operation() -> dict[str, Any]:
