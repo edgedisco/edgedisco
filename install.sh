@@ -45,6 +45,11 @@ EOF
 cleanup() {
   local status=$?
   trap - EXIT
+  if [[ "$INSTALL_COMPLETE" != true && "$status" -eq 0 ]]; then
+    echo "EdgeDisco installer input ended before final verification completed." >&2
+    echo "Download install.sh completely before running it; do not execute a partial transfer." >&2
+    status=1
+  fi
   if [[ "$INSTALL_COMPLETE" != true && "$UPGRADE_STARTED" == true ]]; then
     echo "Restoring the previous EdgeDisco installation..." >&2
     if PYTHONPATH="$PACKAGE_SOURCE/src" "$BASE_PYTHON" -m ai_asset_inventory.upgrade restore --backup "$UPGRADE_BACKUP"; then
@@ -56,9 +61,6 @@ cleanup() {
   fi
   if [[ -n "$TEMP_DIR" ]]; then
     /bin/rm -rf "$TEMP_DIR" || status=1
-  fi
-  if [[ "$INSTALL_COMPLETE" != true && "$status" -eq 0 ]]; then
-    status=1
   fi
   exit "$status"
 }
@@ -232,14 +234,35 @@ done
 echo "Configuring local services..."
 "$CLI" setup "${SETUP_ARGS[@]}"
 
-PUBLIC="$(cat "$INSTALL_ROOT/cli-launcher.path")"
-if [[ ! -x "$PUBLIC" ]]; then
-  echo "EdgeDisco installed, but the managed launcher is not executable: $PUBLIC" >&2
+LAUNCHER_STATE="$INSTALL_ROOT/cli-launcher.path"
+if [[ ! -r "$LAUNCHER_STATE" ]]; then
+  echo "EdgeDisco setup did not create a readable launcher state file: $LAUNCHER_STATE" >&2
   exit 1
 fi
-FRESH_HELP="$(/usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME "$PUBLIC" --help)"
+PUBLIC="$(cat "$LAUNCHER_STATE")"
+if [[ -z "$PUBLIC" ]]; then
+  echo "EdgeDisco setup created an empty launcher state file: $LAUNCHER_STATE" >&2
+  exit 1
+fi
+if [[ ! -x "$PUBLIC" ]]; then
+  echo "EdgeDisco installed, but the managed launcher is not executable: $PUBLIC" >&2
+  /bin/ls -ld "$PUBLIC" "$(/usr/bin/dirname "$PUBLIC")" >&2 || true
+  exit 1
+fi
+LAUNCHER_HELP="$TEMP_DIR/launcher-help.txt"
+if /usr/bin/env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
+    "$PUBLIC" --help >"$LAUNCHER_HELP" 2>&1; then
+  :
+else
+  LAUNCHER_STATUS=$?
+  echo "The managed EdgeDisco launcher failed its --help verification (exit $LAUNCHER_STATUS): $PUBLIC" >&2
+  /bin/cat "$LAUNCHER_HELP" >&2
+  exit 1
+fi
+FRESH_HELP="$(/bin/cat "$LAUNCHER_HELP")"
 if [[ "$FRESH_HELP" != *"demo"* || "$FRESH_HELP" != *"dashboard"* ]]; then
   echo "The managed EdgeDisco launcher is missing required subcommands." >&2
+  /bin/cat "$LAUNCHER_HELP" >&2
   exit 1
 fi
 cat <<EOF
