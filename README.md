@@ -10,7 +10,6 @@ On **macOS** or supported **systemd Linux**, with Python 3.9+ installed, downloa
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
-less install.sh
 bash install.sh
 ```
 
