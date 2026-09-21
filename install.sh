@@ -232,7 +232,9 @@ for command in server agent hook adapters setup status dashboard uninstall mcp d
 done
 
 echo "Configuring local services..."
-"$CLI" setup "${SETUP_ARGS[@]}"
+# When this installer is piped to Bash, stdin still contains the unread tail of
+# the script. Do not let setup or one of its subprocesses consume those bytes.
+"$CLI" setup "${SETUP_ARGS[@]}" </dev/null
 
 LAUNCHER_STATE="$INSTALL_ROOT/cli-launcher.path"
 if [[ ! -r "$LAUNCHER_STATE" ]]; then

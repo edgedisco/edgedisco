@@ -33,11 +33,15 @@ def _free_port() -> int:
 
 
 class InstallerTests(unittest.TestCase):
-    def test_readme_uses_remote_stdin_one_liner(self):
+    def test_readme_downloads_complete_installer_before_running_it(self):
         self.assertIn(
-            "curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash",
+            "curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh\n"
+            "bash install.sh",
             README,
         )
+
+    def test_setup_cannot_consume_piped_installer_input(self):
+        self.assertIn('"$CLI" setup "${SETUP_ARGS[@]}" </dev/null', SCRIPT)
 
     def test_stdin_install_without_terminal_requires_yes(self):
         with tempfile.TemporaryDirectory() as temp:
