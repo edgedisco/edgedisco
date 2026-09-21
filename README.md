@@ -41,7 +41,44 @@ The self-service server binds to localhost. Device uploads use individual creden
 
 ## Project status
 
-EdgeDisco 0.5.0 is an evaluation and controlled-pilot MVP. The dashboard, CSV evidence exports, and MCP inventory feed work today. Optional OTLP asset projection, a durable outbox, and a protobuf encoder exist; **network delivery to an OpenTelemetry Collector is still in development**. The [OpenTelemetry integration design](docs/otel-integration.md) describes the implemented boundary and exporter work that remains.
+EdgeDisco 0.5.0 is an evaluation and controlled-pilot MVP. The dashboard, CSV evidence exports, and MCP inventory feed work today. Optional OTLP Logs delivery includes privacy-filtered asset projection, a durable outbox, and a separately supervised Python exporter process with retries and delivery status. Export is disabled by default and is configured through the protected environment file rather than the dashboard. See [OpenTelemetry integration](docs/otel-integration.md) for configuration and the local collector verification command.
+
+The [managed OTLP enable/disable steps](docs/otel-integration.md#enable-or-disable-managed-export)
+cover active delivery, queue-only operation, verification, and complete shutdown of OTLP capture
+and delivery.
+
+### Optional OpenTelemetry export
+
+The managed installer includes the exporter code and dependencies, but creates no exporter service
+until explicitly enabled. To send asset observations to the local collector, add or update these
+settings in `~/.edgedisco/server.env`, preserving existing credentials:
+
+```sh
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+export EDGEDISCO_OTLP_EXPORT_ENABLED=true
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+```
+
+Then apply the settings and inspect delivery status:
+
+```sh
+edgedisco setup --no-open
+edgedisco otlp-status --json
+```
+
+Status automatically reads `~/.edgedisco/server.env` for the default managed database. It reports
+configured enablement and stored delivery results; use launchd/systemd status to confirm the process
+is running. For a custom installation, pass `--db /path/to/inventory.db --env-file /path/to/server.env`.
+Manual deployments can use `--process-env` to inspect the current shell configuration instead.
+
+To disable delivery, set `EDGEDISCO_OTLP_EXPORT_ENABLED=false` in the same file and rerun
+`edgedisco setup --no-open`. Also set `EDGEDISCO_OTLP_OUTBOX_ENABLED=false` to stop queuing new
+records. Setup verifies the exporter has stopped before removing its service definition; a stop
+failure is reported and the definition is retained for recovery. Existing queued data is not purged.
+See the [OTLP guide](docs/otel-integration.md#enable-or-disable-managed-export) for service checks,
+queue retention, and re-enabling. Grafana is on port 3001; OTLP ingestion uses port 4318.
+
+## Roadmap
 
 Container and VM discovery is planned but is not part of the current collector. The [container and VM discovery roadmap](docs/container-vm-discovery-roadmap.md) separates baseline local-container evidence, presence-only VM inventory, opt-in guest probes, and native guest collectors.
 

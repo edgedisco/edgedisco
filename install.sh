@@ -209,10 +209,10 @@ fi
 echo "Installing EdgeDisco..."
 # The project version may stay constant between source-archive updates. Force
 # replacement so a rerun actually installs the downloaded detector catalog.
-"$VENV_PYTHON" -m pip install --upgrade --force-reinstall "$PACKAGE_SOURCE"
+"$VENV_PYTHON" -m pip install --upgrade --force-reinstall "$PACKAGE_SOURCE[otlp]"
 CLI="$INSTALL_ROOT/venv/bin/edgedisco"
 "$CLI" --help >/dev/null
-for command in server agent hook adapters setup status dashboard uninstall mcp demo; do
+for command in server agent hook adapters setup status dashboard uninstall mcp demo otlp-export otlp-status; do
   if ! "$CLI" "$command" --help >/dev/null; then
     echo "Installed EdgeDisco CLI is missing '$command'; setup was not started." >&2
     exit 1

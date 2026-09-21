@@ -55,8 +55,8 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Establish ownership and response SLAs for newly observed assets.
 - Load-test ingest volume and dashboard queries at the expected fleet size.
 - Define MCP change-log and audit-log retention, cursor expiry, resnapshot procedures, and rotation.
-- Do not treat the OTLP outbox and encoder as collector delivery. Before enabling OTLP network
-  export, implement and test worker claiming, TLS/authentication, timeouts, partial success,
-  retry/backoff, crash recovery, delivered-row retention, and queue health monitoring according to
-  the [exporter specification](otel-integration.md#exporter-specification).
+- Before enabling OTLP network export, approve the collector destination and authentication model,
+  provision TLS or mTLS for remote collectors, monitor `edgedisco otlp-status`, and test delivery,
+  retry, retention, and recovery behavior in the target environment. Keep export disabled until
+  those controls are in place. See the [exporter contract](otel-integration.md#exporter-contract).
 - Run an independent security review before production approval.

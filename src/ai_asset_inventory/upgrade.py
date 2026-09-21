@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .configuration import load_config
 from .database import DATABASE_VERSION
-from .self_service import (AGENT_LABEL, SERVER_LABEL, _health, _launchctl, _parse_env,
+from .self_service import (AGENT_LABEL, SERVER_LABEL, EXPORTER_LABEL, _health, _launchctl, _parse_env,
                            _systemctl, _wait_for_server)
 
 
@@ -43,7 +43,7 @@ def targets(root: Path, home: Path) -> dict[str, Path]:
     for relative in (".cursor/hooks.json", ".claude/settings.json", ".copilot/hooks/edgedisco.json",
                      ".local/bin/edgedisco", ".zprofile", ".bash_profile", ".bash_login", ".profile"):
         result["home/" + relative] = home / relative
-    for label in (SERVER_LABEL, AGENT_LABEL):
+    for label in (SERVER_LABEL, AGENT_LABEL, EXPORTER_LABEL):
         relative = f"Library/LaunchAgents/{label}.plist"
         result["home/" + relative] = home / relative
         relative = f".config/systemd/user/{label}.service"
@@ -108,11 +108,11 @@ def snapshot(root: Path, home: Path, *, quiesce: bool = False) -> Path:
 
 def stop_services(root: Path) -> None:
     if platform.system() == "Linux":
-        for label in (AGENT_LABEL, SERVER_LABEL):
+        for label in (EXPORTER_LABEL, AGENT_LABEL, SERVER_LABEL):
             _systemctl("stop", f"{label}.service", check=False)
     else:
         domain = f"gui/{os.getuid()}"
-        for label in (AGENT_LABEL, SERVER_LABEL):
+        for label in (EXPORTER_LABEL, AGENT_LABEL, SERVER_LABEL):
             _launchctl("bootout", f"{domain}/{label}", check=False)
     if not (root / "server.env").exists():
         return
@@ -127,7 +127,7 @@ def stop_services(root: Path) -> None:
 def start_services(home: Path) -> None:
     if platform.system() == "Linux":
         _systemctl("daemon-reload")
-        for label in (SERVER_LABEL, AGENT_LABEL):
+        for label in (SERVER_LABEL, AGENT_LABEL, EXPORTER_LABEL):
             unit = home / ".config/systemd/user" / f"{label}.service"
             if unit.exists():
                 _systemctl("enable", "--now", f"{label}.service")
@@ -136,7 +136,7 @@ def start_services(home: Path) -> None:
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
         environment.pop(key, None)
-    for label in (SERVER_LABEL, AGENT_LABEL):
+    for label in (SERVER_LABEL, AGENT_LABEL, EXPORTER_LABEL):
         plist = home / "Library/LaunchAgents" / f"{label}.plist"
         if plist.exists():
             subprocess.run(["launchctl", "bootstrap", domain, str(plist)],
@@ -208,11 +208,20 @@ def _preserve_evidence(source: Path, destination: Path) -> None:
             names = {row[1] for row in new}
             columns = [row[1] for row in old if row[1] in names]
             fields = ','.join('"' + col + '"' for col in columns)
+            selected = fields
+            if table == "otlp_outbox":
+                # The stopped worker no longer owns any leases. Older schemas
+                # also reject 'sending' in their status CHECK constraint.
+                selected = ','.join(
+                    "CASE WHEN status='sending' THEN 'retry' ELSE status END" if col == "status"
+                    else "NULL" if col in {"lease_id", "lease_expires_at"}
+                    else '"' + col + '"' for col in columns
+                )
             if table in {"assets", "agent_sessions", "otlp_outbox", "otlp_asset_state"}:
                 keys = [row[1] for row in old if row[5]]
                 updates = ','.join(f'"{col}"=excluded."{col}"' for col in columns if col not in keys)
                 conflict = ','.join('"' + col + '"' for col in keys)
-                sql = (f'INSERT INTO main.{table} ({fields}) SELECT {fields} FROM accepted.{table} WHERE true '
+                sql = (f'INSERT INTO main.{table} ({fields}) SELECT {selected} FROM accepted.{table} WHERE true '
                        f'ON CONFLICT ({conflict}) DO UPDATE SET {updates}')
                 if table != "otlp_outbox":
                     clock = "updated_at" if table == "otlp_asset_state" else "last_seen"

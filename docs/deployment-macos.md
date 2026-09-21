@@ -43,11 +43,19 @@ The installer does not use `sudo` and does not request Full Disk Access, Accessi
 3. Starts a local server on `127.0.0.1:8080`.
 4. Enrolls the Mac and sends its first sanitized inventory report.
 5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot installations.
-6. Creates per-user LaunchAgents for the server and collector.
+6. Creates per-user LaunchAgents for the server and collector. If OTLP export is explicitly
+   enabled, setup also creates a separate exporter LaunchAgent.
 7. Installs a stable `edgedisco` command for normal Terminal sessions.
 8. Opens the dashboard. The administrator token stays in the protected local configuration file.
 
-The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
+The services start whenever that user logs in. Credentials and optional OTLP settings are stored
+with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent
+files. OTLP export is disabled by default and is configured in this file, not in the dashboard.
+After changing the settings, rerun `edgedisco setup --no-open` to add, restart, or remove the
+exporter service. The [OpenTelemetry guide](otel-integration.md#enable-or-disable-managed-export)
+provides the exact settings and commands for active delivery, queue-only mode, and fully disabling
+OTLP. Disabling export removes the LaunchAgent; disabling the outbox also stops creation of new
+OTLP records. Existing queued rows remain in the database while the exporter is disabled.
 
 The collector stays inside `/Applications`, `~/Applications`, explicitly allowlisted executable directories, standard per-user editor-extension/plugin directories, supported MCP configuration files, and current-user process metadata. It does not search Desktop, Documents, Downloads, iCloud Drive, network volumes, removable media, or other users' processes. Editor inventory reads only exact extension directory identities and bounded JetBrains plugin manifests; it does not read editor settings or projects. Unreadable files are skipped without retrying with elevated privileges. macOS may show its normal Background Items notification when the per-user LaunchAgents are installed.
 
@@ -110,12 +118,15 @@ Refresh the dashboard. The active agent or recent session should appear when the
 | `~/.edgedisco/logs/server.err.log` | Server errors |
 | `~/.edgedisco/logs/agent.log` | Collector standard output |
 | `~/.edgedisco/logs/agent.err.log` | Collector errors |
+| `~/.edgedisco/logs/otlp-export.log` | OTLP delivery outcomes when export is enabled |
+| `~/.edgedisco/logs/otlp-export.err.log` | OTLP exporter errors when export is enabled |
 
 Follow the logs:
 
 ```bash
 tail -f ~/.edgedisco/logs/server.err.log
 tail -f ~/.edgedisco/logs/agent.err.log
+tail -f ~/.edgedisco/logs/otlp-export.err.log
 ```
 
 ## Upgrade or repair

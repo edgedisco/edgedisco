@@ -34,6 +34,15 @@ The installer creates a managed virtual environment, credentials, configuration,
 - `com.edgedisco.server.service`
 - `com.edgedisco.agent.service`
 
+If OTLP export is explicitly enabled in `~/.edgedisco/server.env`, setup also creates
+`com.edgedisco.otlp-export.service`. It is a separate Python process. OTLP export is disabled by
+default and is configured through the protected environment file rather than the dashboard. Rerun
+`edgedisco setup --no-open` after changing its settings to add, restart, or remove the service. The
+[OpenTelemetry guide](otel-integration.md#enable-or-disable-managed-export) provides the exact
+settings and commands for active delivery, queue-only mode, and fully disabling OTLP. Disabling
+export removes the user service; disabling the outbox also stops creation of new OTLP records.
+Existing queued rows remain in the database while the exporter is disabled.
+
 It runs `systemctl --user`; it never invokes `sudo`, creates a system service, or scans another user's processes. Reinstallation snapshots the managed state, preserves enrollment and custom configuration, and attempts automatic rollback on failure.
 
 Running `bash ./install.sh` from a source checkout installs that checkout directly and prints its path, which allows testing uncommitted changes. A standalone or stdin installer downloads the configured source archive. Reinstallation replaces the managed package even when the version number is unchanged, then performs and uploads a fresh complete inventory before restarting the agent. An unreadable, symlinked, or non-regular existing database stops the upgrade with ownership and permission guidance; it is never silently replaced.
@@ -49,6 +58,13 @@ systemctl --user status com.edgedisco.server.service
 systemctl --user status com.edgedisco.agent.service
 ```
 
+If OTLP export is enabled, also run:
+
+```bash
+systemctl --user status com.edgedisco.otlp-export.service
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db
+```
+
 `edgedisco dashboard` creates a single-use authenticated local browser session without printing the administrator token. `edgedisco demo` optionally adds clearly labeled synthetic evidence.
 
 Linux discovery includes the current user's process table, bounded CLI locations, `.desktop` entries under `/usr/share/applications` and `~/.local/share/applications`, standard per-user editor-extension/plugin directories, and supported MCP configuration paths. Editor inventory reads only exact extension directory identities and bounded JetBrains plugin manifests. It does not recursively crawl the filesystem or require audit, eBPF, `ptrace`, or elevated permissions.
@@ -60,6 +76,9 @@ systemctl --user restart com.edgedisco.server.service com.edgedisco.agent.servic
 journalctl --user -u com.edgedisco.server.service -u com.edgedisco.agent.service
 edgedisco uninstall
 ```
+
+When OTLP export is enabled, follow its process separately with
+`journalctl --user -u com.edgedisco.otlp-export.service`.
 
 Uninstall removes only the EdgeDisco user units, managed CLI launcher, and managed application hooks. Configuration, credentials, logs, and evidence remain unless `edgedisco uninstall --purge --yes` is used.
 

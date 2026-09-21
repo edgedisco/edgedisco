@@ -17,7 +17,7 @@ from .validation import timestamp, observation_timestamp
 OTLP_MAX_PENDING = 5_000
 OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 OTLP_MAX_AGE_DAYS = 7
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 
 # Runtime uploads do not establish process-inventory freshness.
 FRESH_SCAN = """EXISTS (SELECT 1 FROM scans fresh WHERE fresh.device_id=a.device_id
@@ -174,6 +174,8 @@ class Database:
                 ):
                     if column.split()[0] not in columns:
                         conn.execute(f"ALTER TABLE assets ADD COLUMN {column}")
+            from .otlp_store import migrate_outbox
+            migrate_outbox(conn)
             # Seed retained inventory under the migration's writer reservation,
             # before any new upload can make the change log nonempty.
             from .inventory_sync import bootstrap
@@ -323,16 +325,23 @@ class Database:
                 WHERE asset_key=? AND status IN ('pending','retry') ORDER BY created_at,id""", (asset_key,)).fetchall()
             for row in superseded:
                 self._drop_outbox_row(conn, row, now, "superseded")
+            capacity_available = True
             while True:
                 count, size = conn.execute("""SELECT COUNT(*),COALESCE(SUM(payload_bytes),0)
-                    FROM otlp_outbox WHERE status IN ('pending','retry')""").fetchone()
+                    FROM otlp_outbox WHERE status IN ('pending','retry','sending')""").fetchone()
                 if count < self.otlp_max_pending and size + payload_bytes <= self.otlp_max_payload_bytes:
                     break
                 oldest = conn.execute("""SELECT id,asset_key FROM otlp_outbox
                     WHERE status IN ('pending','retry') ORDER BY created_at,id LIMIT 1""").fetchone()
                 if oldest is None:
+                    # Active leases cannot be evicted to admit a new record.
+                    capacity_available = False
+                    conn.execute("""UPDATE otlp_export_status SET dropped_events_total=dropped_events_total+1,
+                        last_dropped_at=?,last_drop_reason='capacity' WHERE id=1""", (now,))
                     break
                 self._drop_outbox_row(conn, oldest, now, "capacity")
+            if not capacity_available:
+                continue
             conn.execute("""INSERT INTO otlp_outbox
                 (id,asset_key,payload_json,payload_bytes,status,next_attempt_at,created_at)
                 VALUES(?,?,?,?,?,?,?)""", (event_id, asset_key, payload, payload_bytes, "pending", now, now))
@@ -352,6 +361,7 @@ class Database:
             "enabled": self.otlp_enabled,
             "pending": counts.get("pending", 0),
             "retry": counts.get("retry", 0),
+            "sending": counts.get("sending", 0),
             "delivered": counts.get("delivered", 0),
             "failed": counts.get("failed", 0),
             "dropped_events_total": status["dropped_events_total"],

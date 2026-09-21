@@ -28,6 +28,7 @@ from .path_policy import allowed_path
 
 SERVER_LABEL = "com.edgedisco.server"
 AGENT_LABEL = "com.edgedisco.agent"
+EXPORTER_LABEL = "com.edgedisco.otlp-export"
 CLI_NAME = "edgedisco"
 PATH_MARKER_BEGIN = "# >>> edgedisco PATH >>>"
 PATH_MARKER_END = "# <<< edgedisco PATH <<<"
@@ -282,7 +283,11 @@ def _parse_env(path: Path) -> dict[str, str]:
             line = line[7:]
         if "=" in line:
             key, value = line.split("=", 1)
-            values[key] = value.strip().strip("'\"")
+            try:
+                parsed = shlex.split(value, comments=False)
+                values[key] = parsed[0] if len(parsed) == 1 else value.strip()
+            except ValueError:
+                raise RuntimeError("Invalid server.env quoting") from None
     return values
 
 
@@ -291,7 +296,7 @@ def ensure_credentials(layout: Layout, port: int | None = None) -> dict[str, str
     values.setdefault("AAI_ADMIN_TOKEN", secrets.token_urlsafe(32))
     values.setdefault("AAI_ENROLLMENT_TOKEN", secrets.token_urlsafe(32))
     values["EDGEDISCO_PORT"] = str(port or int(values.get("EDGEDISCO_PORT", "8080")))
-    rendered = "".join(f"export {key}={value}\n" for key, value in values.items())
+    rendered = "".join(f"export {key}={shlex.quote(value)}\n" for key, value in values.items())
     _atomic_write(layout.env, rendered)
     return values
 
@@ -538,6 +543,9 @@ def _setup_self_service(layout: Layout, port: int | None, all_adapters: bool,
     layout.database.parent.mkdir(parents=True, exist_ok=True)
     layout.logs.mkdir(parents=True, exist_ok=True)
     values = ensure_credentials(layout, port)
+    # Stop delivery before unrelated setup steps can fail or enqueue a new scan.
+    if values.get("EDGEDISCO_OTLP_EXPORT_ENABLED") != "true":
+        configure_exporter_service(layout, values)
     selected_port = int(values["EDGEDISCO_PORT"])
     write_services(layout, selected_port)
 
@@ -581,6 +589,8 @@ def _setup_self_service(layout: Layout, port: int | None, all_adapters: bool,
         client.enroll()
         report = client.send_once()
     restart_agent()
+    if values.get("EDGEDISCO_OTLP_EXPORT_ENABLED") == "true":
+        configure_exporter_service(layout, values)
     launcher = install_cli_launcher(layout, home)
     dashboard = f"http://127.0.0.1:{selected_port}"
     if open_browser:
@@ -704,6 +714,10 @@ def uninstall_macos(*, root: Path | None = None, purge: bool = False,
     domain = f"gui/{os.getuid()}"
     _launchctl("bootout", f"{domain}/{AGENT_LABEL}", check=False)
     _launchctl("bootout", f"{domain}/{SERVER_LABEL}", check=False)
+    exporter_plist = layout.launch_agents / f"{EXPORTER_LABEL}.plist"
+    if exporter_plist.exists():
+        _launchctl("bootout", f"{domain}/{EXPORTER_LABEL}", check=False)
+        exporter_plist.unlink()
     (layout.launch_agents / f"{AGENT_LABEL}.plist").unlink(missing_ok=True)
     (layout.launch_agents / f"{SERVER_LABEL}.plist").unlink(missing_ok=True)
     launcher = uninstall_cli_launcher(layout, home)
@@ -734,7 +748,10 @@ def uninstall_linux(*, root: Path | None = None, purge: bool = False,
     if platform.system() != "Linux":
         raise RuntimeError("Linux uninstall requires Linux")
     layout = default_layout(root, home)
-    for label in (AGENT_LABEL, SERVER_LABEL):
+    labels = [AGENT_LABEL, SERVER_LABEL]
+    if (layout.systemd_user / f"{EXPORTER_LABEL}.service").exists():
+        labels.insert(0, EXPORTER_LABEL)
+    for label in labels:
         _systemctl("disable", "--now", f"{label}.service", check=False)
         (layout.systemd_user / f"{label}.service").unlink(missing_ok=True)
     _systemctl("daemon-reload", check=False)
@@ -768,3 +785,61 @@ def uninstall_self_service(**kwargs: Any) -> dict[str, Any]:
     if platform.system() == "Linux":
         return uninstall_linux(**kwargs)
     raise RuntimeError("self-service uninstall supports macOS and systemd-based Linux")
+
+
+def configure_exporter_service(layout: Layout, values: dict[str, str]) -> None:
+    """Enable a separate delivery worker only for explicitly configured egress."""
+    from .otlp_config import ExportConfig
+    macos = platform.system() == "Darwin"
+    service = (layout.launch_agents / f"{EXPORTER_LABEL}.plist" if macos else
+               layout.systemd_user / f"{EXPORTER_LABEL}.service")
+    if values.get("EDGEDISCO_OTLP_EXPORT_ENABLED") != "true":
+        if service.exists():
+            if macos:
+                target = f"gui/{os.getuid()}/{EXPORTER_LABEL}"
+                result = _launchctl("bootout", target, check=False)
+                state = _launchctl("print", target, check=False)
+                stopped = state.returncode != 0 and "Could not find service" in state.stderr
+                # bootout also fails when the job was already unloaded. Only an
+                # explicit service-not-found response makes that case safe.
+                if result.returncode != 0 and not stopped:
+                    raise RuntimeError("Could not stop OTLP exporter; service definition retained")
+            else:
+                result = _systemctl("disable", "--now", service.name, check=False)
+                if result.returncode != 0:
+                    raise RuntimeError("Could not stop OTLP exporter; service definition retained")
+                state = _systemctl("show", service.name, "--property=ActiveState", "--value", check=False)
+                stopped = state.returncode == 0 and state.stdout.strip() in {"inactive", "failed"}
+            if not stopped:
+                raise RuntimeError("Could not verify OTLP exporter stopped; service definition retained")
+            service.unlink()
+            if not macos:
+                _systemctl("daemon-reload")
+        return
+    ExportConfig.from_env(values)
+    try:
+        import opentelemetry.proto.collector.logs.v1.logs_service_pb2  # noqa: F401
+    except ImportError:
+        raise RuntimeError("OTLP export requires ai-asset-inventory[otlp]") from None
+    runner = layout.bin / "run-otlp-export.sh"
+    _atomic_write(runner, (
+        "#!/bin/sh\nset -a\n"
+        f". {shlex.quote(str(layout.env))}\nset +a\n"
+        f"exec {shlex.quote(str(_cli_executable(layout)))} otlp-export --db {shlex.quote(str(layout.database))}\n"
+    ), 0o700)
+    if macos:
+        content = plistlib.loads(_plist(EXPORTER_LABEL, [str(runner)],
+            layout.logs / "otlp-export.log", layout.logs / "otlp-export.err.log"))
+        content["ThrottleInterval"] = 15
+        _atomic_write(service, plistlib.dumps(content))
+        _restart_service(EXPORTER_LABEL, service)
+    else:
+        _atomic_write(service, (
+            "[Unit]\nDescription=EdgeDisco OTLP Logs exporter\n"
+            f"After=network-online.target {SERVER_LABEL}.service\n\n"
+            f"[Service]\nType=simple\nExecStart={_systemd_quote(runner)}\n"
+            "Restart=always\nRestartSec=15\nNoNewPrivileges=true\nPrivateTmp=true\n"
+            f"ProtectSystem=strict\nReadWritePaths={_systemd_quote(layout.root)}\n"
+            "\n[Install]\nWantedBy=default.target\n"
+        ))
+        _restart_systemd_service(service.name)

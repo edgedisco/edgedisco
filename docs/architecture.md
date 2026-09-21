@@ -49,8 +49,14 @@ environment values, headers, URLs, and raw paths are excluded. See
 When explicitly enabled, accepted inventory snapshots also pass through a stricter recognized-asset
 projection into a bounded SQLite outbox. The projection records state changes for applications,
 processes, and agent runtimes and the encoder produces OTLP Logs protobuf. Inventory observation
-time and server receipt time are retained separately. No exporter or collector network delivery is
-implemented yet. See [OpenTelemetry integration design](otel-integration.md).
+time and server receipt time are retained separately.
+
+Delivery runs as a separate Python process, supervised by launchd on macOS or `systemd --user` on
+Linux. It claims outbox rows using expiring SQLite leases, sends OTLP/HTTP requests, and records
+delivery results without sharing memory or a thread pool with the inventory server. Collector
+latency, retries, and exporter restarts therefore do not block report ingestion. Export and outbox
+creation are disabled by default and require explicit configuration in the protected environment
+file. See [OpenTelemetry integration](otel-integration.md).
 
 Runtime spool uploads are serialized independently of hook writers. Files are sent in bounded batches and retained until all batches succeed. Failed uploads replay the same event IDs, which the server deduplicates. Inventory snapshots and session state use observation timestamps rather than arrival order; older snapshots retain their scan headers without replacing current state.
 
@@ -71,6 +77,8 @@ sequenceDiagram
   participant A as Administrator
   participant M as MCP consumer
   participant O as OTLP outbox
+  participant X as OTLP exporter process
+  participant C as OTel collector
   E->>API: Enroll with shared credential
   API-->>E: Device ID and upload token
   H->>E: Sanitized lifecycle metadata
@@ -79,6 +87,12 @@ sequenceDiagram
   API->>DB: Scan and asset state
   opt OTLP outbox enabled
     API->>O: Sanitized asset state change
+  end
+  opt OTLP export enabled
+    X->>O: Atomically claim due records
+    X->>C: OTLP/HTTP protobuf batch
+    C-->>X: Delivery result
+    X->>O: Delivered, retry, or failed
   end
   A->>API: Authenticated dashboard request
   API->>DB: Read fleet evidence
@@ -113,4 +127,4 @@ sequenceDiagram
 - Administrator access is independent from endpoint upload access.
 - The database and backups contain compliance evidence and require restricted access.
 - macOS collection is per-user and unprivileged. Root LaunchDaemons are intentionally unsupported because they inspect the wrong user and expand privilege without improving coverage.
-- Linux self-service collection is also per-user and unprivileged. Supported hosts use `systemd --user` units for the local server and collector. The installer requires an active user manager, refuses root execution, and does not enable lingering; containers, non-systemd systems, and sessions without a user manager use manual deployment.
+- Linux self-service collection is also per-user and unprivileged. Supported hosts use `systemd --user` units for the local server, collector, and optional OTLP exporter. The installer requires an active user manager, refuses root execution, and does not enable lingering; containers, non-systemd systems, and sessions without a user manager use manual deployment.

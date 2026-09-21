@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -20,6 +21,16 @@ def parser() -> argparse.ArgumentParser:
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8080)
     server.add_argument("--db", type=Path, default=Path("data/inventory.db"))
+    for name in ("otlp-export", "otlp-status"):
+        action = sub.add_parser(name, help="deliver OTLP logs" if name == "otlp-export" else "show OTLP delivery status")
+        action.add_argument("--db", type=Path, default=Path.home() / ".edgedisco/data/inventory.db")
+        if name == "otlp-export":
+            action.add_argument("--once", action="store_true", help="process one due batch and exit")
+        else:
+            action.add_argument("--json", action="store_true")
+            source = action.add_mutually_exclusive_group()
+            source.add_argument("--env-file", type=Path, help="read configuration from this file without executing it")
+            source.add_argument("--process-env", action="store_true", help="check only the current process environment")
     agent = sub.add_parser("agent", help="run endpoint collector")
     agent_sub = agent.add_subparsers(dest="agent_command", required=True)
     for name in ("scan", "send", "run", "enroll"):
@@ -66,6 +77,43 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
+    if args.command in ("otlp-export", "otlp-status"):
+        from .otlp_config import ExportConfig, ConfigurationError
+        from .otlp_store import OutboxStore
+        try:
+            if args.command == "otlp-export":
+                from .otlp_exporter import Exporter
+                config = ExportConfig.from_env()  # Validate before opening the database.
+                Exporter(OutboxStore(args.db), config).run(once=args.once)
+            else:
+                error = None
+                from .self_service import default_layout, _parse_env
+                layout = default_layout()
+                env_file = args.env_file
+                if (env_file is None and not args.process_env
+                        and args.db.resolve() == layout.database.resolve() and layout.env.is_file()):
+                    env_file = layout.env
+                if env_file is not None and not env_file.is_file():
+                    raise RuntimeError("OTLP configuration file does not exist or is not a regular file")
+                try:
+                    config = ExportConfig.from_env(
+                        _parse_env(env_file) if env_file is not None else None, require_enabled=False)
+                except ConfigurationError as exc:
+                    error = str(exc)
+                result = OutboxStore(args.db).status()
+                result.update(configuration_valid=error is None, configuration_error=error,
+                              export_enabled=config.enabled if error is None else False,
+                              configuration_source="file" if env_file is not None else "environment")
+                if args.json:
+                    print(json.dumps(result, indent=2))
+                else:
+                    for key, value in result.items():
+                        print(f"{key}: {json.dumps(value)}")
+        except (ConfigurationError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from None
+        except (OSError, ValueError, sqlite3.Error):
+            raise SystemExit("OTLP exporter operation failed") from None
+        return
     if args.command == "server":
         serve(args.host, args.port, args.db)
         return

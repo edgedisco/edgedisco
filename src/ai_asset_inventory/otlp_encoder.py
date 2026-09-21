@@ -1,6 +1,6 @@
 """Encode only EdgeDisco's sanitized outbox event as OTLP Logs protobuf.
 
-Future transport contract: POST /v1/logs with Content-Type: application/x-protobuf.
+Transport contract: POST /v1/logs with Content-Type: application/x-protobuf.
 This module performs no HTTP requests and does not accept discovery or report objects.
 """
 

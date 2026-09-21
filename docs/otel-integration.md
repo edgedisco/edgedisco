@@ -1,23 +1,189 @@
 # OpenTelemetry integration design
 
-EdgeDisco currently implements the local half of an OTLP Logs integration. It creates a strict,
-privacy-filtered asset state-change event, stores it in a durable SQLite outbox, and can encode the
-stored event as an OTLP protobuf `ExportLogsServiceRequest`. It does not yet run an exporter or make
-network requests to an OpenTelemetry Collector.
+EdgeDisco projects privacy-filtered asset state changes into a durable SQLite outbox and
+exports them as OTLP Logs over HTTP with binary protobuf. Delivery runs in a separate process,
+so collector outages do not block inventory ingestion.
 
-## Current data flow
+The exporter is a separate Python process, not a thread or task inside the inventory server.
+Managed installations supervise it with launchd on macOS or `systemd --user` on Linux. The two
+processes coordinate only through the SQLite outbox: the server writes state changes and the
+exporter claims and completes them using expiring leases.
+Within the exporter process, each HTTP request runs in a helper thread so its main loop can enforce
+the request deadline and shutdown grace period. No exporter thread runs inside the inventory server.
 
 ```mermaid
 flowchart LR
   A[Accepted inventory snapshot] --> P[Strict asset projection]
   P -->|state changed| Q[SQLite OTLP outbox]
-  Q --> E[OTLP Logs protobuf encoder]
-  E -. exporter not implemented .-> C[OpenTelemetry Collector]
+  Q --> E[OTLP Logs protobuf exporter]
+  E --> C[OpenTelemetry Collector]
+  C --> L[Loki]
 ```
 
-Set `EDGEDISCO_OTLP_OUTBOX_ENABLED=true` on the inventory server to populate the outbox. Install
-`ai-asset-inventory[otlp]` to use the protobuf encoder. Enabling the outbox alone does not deliver
-telemetry.
+## Enable or disable managed export
+
+There is currently no dashboard control for OTLP settings. Managed installations read them from
+`~/.edgedisco/server.env`. The default is fully off: setup does not create an exporter service,
+the inventory server does not populate the OTLP outbox, and no telemetry leaves the host.
+
+The two switches support three modes:
+
+| Outbox | Export | Behavior |
+| --- | --- | --- |
+| `false` | `false` | Fully off. No new OTLP records and no exporter service. This is the default. |
+| `true` | `false` | Queue-only. New state changes enter the bounded outbox, but setup removes the exporter service and sends nothing. |
+| `true` | `true` | Active. New state changes enter the outbox and the separate exporter service delivers due records. |
+
+`false`/`true` is invalid because delivery cannot run without the outbox.
+
+### Enable delivery
+
+Open `~/.edgedisco/server.env` in a text editor and add or replace these lines. Keep only one line
+for each setting:
+
+```dotenv
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+export EDGEDISCO_OTLP_EXPORT_ENABLED=true
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+```
+
+`http/protobuf` is the default protocol, so it does not need to be set. Plain HTTP is accepted only
+for a literal loopback address. Use an authenticated HTTPS endpoint for a remote collector.
+
+Apply the settings and create the optional service:
+
+```sh
+edgedisco setup --no-open
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
+```
+
+For this default managed database, `otlp-status` automatically reads `~/.edgedisco/server.env`.
+File settings are checked independently of ambient shell variables. `configuration_source` reports
+`file` or `environment`, and `export_enabled` describes the configuration being checked, not whether
+a worker is currently running. Confirm process health using the service commands below.
+
+For a custom managed root, use both paths explicitly:
+
+```sh
+edgedisco setup --root /path/to/edgedisco --no-open
+edgedisco otlp-status --db /path/to/edgedisco/data/inventory.db \
+  --env-file /path/to/edgedisco/server.env --json
+```
+
+Use `--process-env` for a manual deployment whose configuration comes from the current shell.
+An explicitly supplied missing configuration file is an error; status does not silently fall back.
+
+On macOS, verify the process with:
+
+```sh
+launchctl print "gui/$(id -u)/com.edgedisco.otlp-export"
+tail -f ~/.edgedisco/logs/otlp-export.err.log
+```
+
+On Linux, verify it with:
+
+```sh
+systemctl --user status com.edgedisco.otlp-export.service
+journalctl --user -u com.edgedisco.otlp-export.service
+```
+
+Existing inventory is not backfilled. Setup sends a fresh scan after restarting the server, and
+subsequent state changes populate the enabled outbox.
+
+### Pause delivery but keep queuing
+
+Set the outbox to `true` and export to `false`, then rerun setup:
+
+```dotenv
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+export EDGEDISCO_OTLP_EXPORT_ENABLED=false
+```
+
+```sh
+edgedisco setup --no-open
+```
+
+Setup stops and removes the managed exporter service. The inventory server continues adding state
+changes to the bounded outbox. Re-enabling export resumes eligible queued records. Queue age and
+capacity limits still apply while delivery is paused.
+Disablement runs before server restart, enrollment, and scanning. Setup removes the service
+definition only after a successful stop and a service-manager check that it is no longer running.
+If stopping or verification fails, setup reports an error and retains the definition for recovery;
+do not assume delivery stopped until the service manager confirms it.
+
+### Disable OTLP completely
+
+Set both switches to `false`, remove any endpoint, header, certificate, and client-key settings that
+are no longer needed, then rerun setup:
+
+```dotenv
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=false
+export EDGEDISCO_OTLP_EXPORT_ENABLED=false
+```
+
+```sh
+edgedisco setup --no-open
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
+```
+
+Setup stops and removes the managed exporter service, and the restarted inventory server stops
+creating new OTLP records. Disabling does not delete existing outbox rows or delivery totals.
+Re-enabling later resumes eligible queued records; records older than the seven-day outbox limit
+are discarded when the worker next claims work. While the worker remains disabled, those rows are
+retained. `edgedisco uninstall --purge --yes` deletes the complete managed database along with all
+other local EdgeDisco data; there is no OTLP-only purge command.
+
+## Running against the local stack
+
+With the Docker Compose stack in `../otel-stack` running, use its collector endpoint on
+**4318**. Port **3001** is Grafana; it is not the ingestion endpoint.
+
+```sh
+python -m pip install -e '.[otlp]'
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+export EDGEDISCO_OTLP_EXPORT_ENABLED=true
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
+
+# Restart the inventory server with OUTBOX_ENABLED=true before collecting new scans.
+# In a separate terminal with these same settings:
+edgedisco otlp-export --db ~/.edgedisco/data/inventory.db
+
+# Queue health, totals, and configuration validation:
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --process-env --json
+```
+
+`otlp-export --once` processes one due claim and exits. It does not wait for future retries;
+inspect `otlp-status` for the delivery outcome. The normal command polls until SIGINT/SIGTERM.
+Existing inventory is not automatically backfilled: new scans populate the enabled outbox.
+The worker requires an existing database; it never creates or replaces an inventory database.
+Schema version 2 outboxes migrate transactionally to version 3; older schemas require starting
+the updated inventory server first.
+
+For a manual foreground deployment, stop delivery with Ctrl-C or SIGTERM, then restart the
+inventory server without `EDGEDISCO_OTLP_OUTBOX_ENABLED=true` if new records should also stop.
+Shell exports affect only processes started from that environment; they do not create or remove a
+managed service. Use `edgedisco setup --no-open` for managed-service changes.
+
+Managed installations should follow the enablement steps above. The managed installer includes the
+OTLP dependencies, and upgrades, rollback, and uninstall include the optional exporter service.
+Custom installations must install the `[otlp]` extra themselves. Both switches default to `false`,
+and the endpoint has no default. Once explicitly enabled, protocol, batching, timeout, retry,
+lease, and retention settings have the operational defaults listed below.
+
+To test the full pipeline with an isolated database and four simulated observations:
+
+```sh
+PYTHONPATH=src python scripts/verify_otlp_export.py \
+  --endpoint http://127.0.0.1:4318/v1/logs \
+  --output-dir /tmp/edgedisco-otel-verification
+```
+
+Use a fresh output directory on each run. The script invokes the real exporter CLI, alternates
+plain/gzip requests, and queries Loki on port 3100. It checks running/stopped transitions,
+versions, simulation and host metadata, observation IDs, and both event and observed timestamps.
+It leaves the test database and `result.json` in that directory and prints a LogQL query to use
+in Grafana Explore on `http://127.0.0.1:3001`. No real endpoint inventory is sent by this test.
 
 The projection emits `edgedisco.asset.observed` log records for recognized applications,
 processes, and agent runtimes. It exports state transitions rather than every heartbeat. The
@@ -35,17 +201,22 @@ encodable and use the inventory observation time for both fields.
 
 ## Queue behavior
 
-The default queue holds at most 5,000 pending/retry records, 16 MiB of pending/retry JSON, and seven
-days of undelivered evidence. A newer state for the same logical asset supersedes its older pending
-state. Age, capacity, oversize, and superseded drops increment `dropped_events_total`; status is
-available through `Database.otlp_outbox_status()` for future operational surfaces. Local inventory
+The default queue holds at most 5,000 undelivered records (including active claims), 16 MiB of
+undelivered JSON, and seven days of undelivered evidence. A newer state for the same logical asset
+supersedes its older pending state. Age, capacity, oversize, and superseded drops increment
+`dropped_events_total`; status is
+available through `edgedisco otlp-status` and `Database.otlp_outbox_status()`. Local inventory
 ingestion continues if projection bookkeeping fails or outbound evidence is dropped.
+When a failed request or expired lease returns an older in-flight record to retry, the worker
+checks the latest observation ID and discards superseded records. This also applies after a newer
+delivered row has been cleaned up. Requests already sent cannot be recalled; consumers should use
+event timestamps rather than arrival order when deriving current state.
 
 This is a latest-state delivery design. It does not guarantee delivery of every intermediate
-transition when the destination is unavailable. Delivered rows also have no implemented cleanup
-policy because the exporter lifecycle is not present yet.
+transition when the destination is unavailable. The worker removes delivered rows after one day
+and failed rows after seven days by default. Cleanup and age eviction use bounded transactions.
 
-## Exporter specification
+## Exporter contract
 
 ### Scope and process model
 
@@ -129,8 +300,7 @@ settings at runtime; changing endpoint or credentials requires a supervised rest
 
 ### Durable state and claiming
 
-Rebuild the outbox table during migration to extend its existing `status` check with `sending`, and
-add the following nullable columns:
+Schema version 3 extends the outbox `status` check with `sending` and adds these nullable columns:
 
 | Column | Meaning |
 | --- | --- |
@@ -142,7 +312,7 @@ add the following nullable columns:
 
 Existing `attempt_count`, `next_attempt_at`, `delivered_at`, and `last_error_code` columns remain.
 Limit error categories to a fixed enum and never store a response body or rendered request payload.
-Extend `otlp_export_status` with cumulative attempted, retried, delivered, and failed event counts,
+`otlp_export_status` includes cumulative attempted, retried, delivered, and failed event counts,
 plus `last_attempt_at`, `last_success_at`, `last_failure_at`, `last_failure_code`, and
 `last_http_status`. These aggregates survive row cleanup.
 
@@ -161,8 +331,9 @@ stateDiagram-v2
 
 Claim rows in a short `BEGIN IMMEDIATE` transaction. First recover expired `sending` rows to
 `retry`, then select due `pending` and `retry` rows in stable insertion order, limited by record
-count and estimated batch bytes. Set one new cryptographically random `lease_id`, `sending`, lease
-expiry, attempt count, and `last_attempt_at`, then commit. Perform encoding and network I/O only
+count and estimated batch bytes. Set one new cryptographically random `lease_id`, `sending`, and
+lease expiry, then commit. Increment attempt count and set `last_attempt_at` immediately before each
+HTTP request, after encoding and rechecking ownership. Perform encoding and network I/O only
 after the transaction commits.
 
 Every completion update must match both the row ID and `lease_id`. A worker whose lease expired
@@ -266,14 +437,14 @@ access to ports 4317 and 4318.
 
 The stack's transform and Loki metadata contract consumes the existing schema version,
 observation ID, device ID, asset kind/name/vendor/running state, simulation marker, and optional
-host application and relationship. It must also preserve optional `asset.version`. The distinct
+host application and relationship. It also preserves optional `asset.version`. The distinct
 OTLP event and observed timestamps require no collector transform, but integration tests must
-verify both survive ingestion. Dashboard and synthetic-sender fixtures in `otel-stack` should be
-updated when the exporter lands so they cover versioned and stopped assets.
+verify both survive ingestion. The repository integration script covers versioned and stopped
+assets against the running stack.
 
-### Acceptance criteria
+### Verification coverage
 
-The exporter is complete when automated tests demonstrate all of the following:
+The exporter tests and opt-in live integration cover:
 
 1. Endpoint precedence, path construction, header parsing, TLS/mTLS validation, compression, and
    secret-safe configuration errors.
@@ -289,5 +460,6 @@ The exporter is complete when automated tests demonstrate all of the following:
    versioned asset, and a simulated asset, then queries Loki to verify the expected metadata and
    timestamps.
 
-Until these criteria are implemented, the OTLP path remains an outbox and encoder preview. Route
-production inventory through the MCP snapshot/change feed or the existing authenticated exports.
+OTLP configuration follows the [OpenTelemetry exporter specification](https://opentelemetry.io/docs/specs/otel/protocol/exporter/).
+The worker deliberately requires explicit enablement and an endpoint, and restricts plain HTTP
+to literal loopback addresses. It does not support OTLP/gRPC, JSON delivery, or remote HTTP.
