@@ -7,6 +7,7 @@ from typing import Any
 
 from . import __version__
 from .database import Database, utc_now
+from .inventory_sync import bootstrap, changes, snapshot
 
 
 class AuditLog:
@@ -96,6 +97,27 @@ def create_server(db_path: Path, audit_path: Path | None = None):
         """List discovered MCP servers without arguments, environment values, or credentials."""
         result = database.list_assets(kind="mcp_server", limit=limit)
         audit.record("list_mcp_servers", {"limit": limit}, len(result))
+        return result
+
+    @mcp.tool()
+    def inventory_snapshot(watermark: int | None = None, after: str = "",
+                           limit: int = 100) -> dict[str, Any]:
+        """Page through privacy-safe assets. Reuse watermark on every page."""
+        with database.connect() as conn:
+            bootstrap(conn)
+            result = snapshot(conn, watermark=watermark, after=after, limit=limit)
+        audit.record("inventory_snapshot", {"watermark": watermark, "after": after,
+                                           "limit": limit}, len(result["items"]))
+        return result
+
+    @mcp.tool()
+    def inventory_changes(cursor: int = 0, limit: int = 100) -> dict[str, Any]:
+        """Read ordered asset upserts and deletions after a cursor."""
+        with database.connect() as conn:
+            bootstrap(conn)
+            result = changes(conn, cursor=cursor, limit=limit)
+        audit.record("inventory_changes", {"cursor": cursor, "limit": limit},
+                     len(result["items"]))
         return result
 
     return mcp

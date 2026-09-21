@@ -37,7 +37,7 @@ An installed tool, a configured MCP server, and a running process are different 
 
 EdgeDisco collects inventory and lifecycle **metadata**. Its collector and hooks exclude prompts, responses, source code, documents, tool inputs and outputs, credentials, environment values, raw command lines, and MCP arguments or remote URLs. Supported path and command details are reduced to local fingerprints. Readable binaries found in approved install locations may also receive a SHA-256 content fingerprint; binary contents are not uploaded.
 
-The self-service server binds to localhost. Device uploads use individual credentials, while dashboard access uses a separate administrator credential. The optional MCP interface exposes six audited, read-only inventory tools and also binds to localhost. Review the [architecture and collected fields](docs/architecture.md), [fingerprinting details](https://github.com/edgedisco/edgedisco/blob/main/docs/fingerprinting.md), and [production hardening checklist](docs/production-hardening.md) before a broader deployment.
+The self-service server binds to localhost. Device uploads use individual credentials, while dashboard access uses a separate administrator credential. The optional MCP interface exposes audited, read-only inventory tools and also binds to localhost. It includes a [snapshot and change feed](docs/inventory-sync-mcp.md) for automated inventory consumers. Review the [architecture and collected fields](docs/architecture.md), [fingerprinting details](https://github.com/edgedisco/edgedisco/blob/main/docs/fingerprinting.md), and [production hardening checklist](docs/production-hardening.md) before a broader deployment.
 
 ## Project status
 
