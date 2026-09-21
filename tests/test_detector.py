@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +143,51 @@ class DetectorTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(detector._classify_process(row), expected)
 
+    def test_google_antigravity_surfaces_are_detected_separately(self):
+        cases = [
+            ("/Users/test/.local/bin/agy", "agy", "Google Antigravity CLI"),
+            ("/Users/test/.local/bin/agy-ide", "agy-ide", "Google Antigravity IDE"),
+            ("/Applications/Antigravity.app/Contents/MacOS/Antigravity",
+             "Antigravity", "Google Antigravity"),
+            ("/Applications/Antigravity IDE.app/Contents/MacOS/Antigravity IDE",
+             "Antigravity IDE", "Google Antigravity IDE"),
+        ]
+        for executable, command, expected in cases:
+            with self.subTest(expected=expected):
+                row = detector.ProcessObservation(10, 1, executable, [command])
+                self.assertEqual(detector._classify_process(row)[0], expected)
+        self.assertEqual(detector._classify_process(detector.ProcessObservation(
+            10, 1, "/usr/local/bin/gemini", ["gemini"]
+        ))[0], "Gemini CLI")
+
+    def test_supported_desktop_surfaces_are_classified(self):
+        expected = {
+            "Kiro": "Kiro IDE",
+            "Kimi Code": "Kimi Code",
+            "Goose": "Goose",
+            "OpenCode": "OpenCode",
+            "OpenClaw": "OpenClaw",
+        }
+        for display_name, product in expected.items():
+            with self.subTest(display_name=display_name):
+                self.assertEqual(detector._classify(display_name)[0], product)
+
+    def test_supported_desktop_installations_emit_separate_evidence(self):
+        candidates = [
+            ("Kiro", Path("/Applications/Kiro.app"), "1.0"),
+            ("Kimi Code", Path("/Applications/Kimi Code.app"), "2.0"),
+            ("Goose", Path("/Applications/Goose.app"), "3.0"),
+            ("OpenCode", Path("/Applications/OpenCode.app"), "4.0"),
+            ("OpenClaw", Path("/Applications/OpenClaw.app"), "5.0"),
+        ]
+        with patch.object(detector, "_installed_candidates", return_value=iter(candidates)), \
+             patch.object(detector.platform, "system", return_value="Linux"):
+            assets = detector.scan_installed_apps()
+        self.assertEqual({asset.name for asset in assets}, {
+            "Kiro IDE", "Kimi Code", "Goose", "OpenCode", "OpenClaw",
+        })
+        self.assertTrue(all(asset.metadata["package"].endswith(".app") for asset in assets))
+
     def test_hermes_and_openclaw_mentions_in_prompt_text_are_ignored(self):
         for prompt in ("please use hermes-agent", "please use openclaw"):
             with self.subTest(prompt=prompt):
@@ -223,7 +269,9 @@ class DetectorTests(unittest.TestCase):
 
     def test_new_installed_clis_are_discovered_without_recursing(self):
         expected = {"kimi": "Kimi Code", "kilo": "Kilo Code", "vibe": "Mistral Vibe",
-                    "crush": "Crush", "junie": "Junie CLI", "auggie": "Auggie", "devin": "Devin CLI"}
+                    "crush": "Crush", "junie": "Junie CLI", "auggie": "Auggie",
+                    "devin": "Devin CLI", "agy": "Google Antigravity CLI",
+                    "agy-ide": "Google Antigravity IDE"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             for executable in expected:
@@ -279,6 +327,8 @@ class DetectorTests(unittest.TestCase):
             local_programs = root / "Local" / "Programs"
             (program_files / "Cursor").mkdir(parents=True)
             (local_programs / "Claude").mkdir(parents=True)
+            (local_programs / "Antigravity").mkdir()
+            (local_programs / "Antigravity IDE").mkdir()
             (local_programs / "Unrelated").mkdir()
             environment = {
                 "ProgramFiles": str(program_files),
@@ -287,7 +337,120 @@ class DetectorTests(unittest.TestCase):
             with patch.object(detector.platform, "system", return_value="Windows"), \
                  patch.dict(detector.os.environ, environment, clear=True):
                 names = {asset.name for asset in detector.scan_installed_apps()}
-        self.assertEqual(names, {"Claude", "Cursor"})
+        self.assertEqual(names, {
+            "Claude", "Cursor", "Google Antigravity", "Google Antigravity IDE",
+        })
+
+    def test_windows_antigravity_cli_root_is_scanned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            localappdata = Path(directory).resolve() / "Local"
+            cli_root = localappdata / "agy" / "bin"
+            cli_root.mkdir(parents=True)
+            (cli_root / "agy.exe").touch()
+            environment = {"LOCALAPPDATA": str(localappdata)}
+            with patch.object(detector.platform, "system", return_value="Windows"), \
+                 patch.dict(detector.os.environ, environment, clear=True):
+                self.assertIn(cli_root, detector._executable_roots())
+                assets = detector.scan_installed_clis()
+        self.assertIn(("Google Antigravity CLI", "agy.exe"), [
+            (asset.name, asset.metadata["package"]) for asset in assets
+        ])
+
+    def test_vscode_family_extension_inventory_is_bounded_and_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "extensions"
+            root.mkdir()
+            expected = {
+                "anthropic.claude-code": "Claude Code",
+                "openai.chatgpt": "OpenAI Codex",
+                "saoudrizwan.claude-dev": "Cline",
+                "continue.continue": "Continue",
+                "kilocode.kilo-code": "Kilo Code",
+                "moonshot-ai.kimi-code": "Kimi Code",
+                "augment.vscode-augment": "Augment Code",
+                "github.copilot-chat": "GitHub Copilot",
+                "google.geminicodeassist": "Gemini Code Assist",
+                "sst-dev.opencode": "OpenCode",
+            }
+            for extension_id in expected:
+                extension = root / f"{extension_id}-1.2.3"
+                extension.mkdir()
+                publisher, name = extension_id.split(".", 1)
+                (extension / "package.json").write_text(json.dumps({
+                    "publisher": publisher, "name": name, "version": "1.2.3",
+                }))
+            (root / "github.copilot-0.9.0").mkdir()
+            (root / ".obsolete").write_text(json.dumps({"github.copilot-0.9.0": True}))
+            (root / "unrelated.claude-code-9.9.9").mkdir()
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "github.copilot-1.0.0").mkdir()
+            with patch.object(detector, "_vscode_extension_roots", return_value=(("Cursor", root),)), \
+                 patch.object(detector, "scan_jetbrains_plugins", return_value=[]):
+                assets = detector.scan_editor_extensions()
+        self.assertEqual({asset.metadata["package"]: asset.name for asset in assets}, expected)
+        self.assertTrue(all(asset.metadata["configured_in"] == "Cursor" for asset in assets))
+        self.assertNotIn(str(root), json.dumps([asset.to_dict() for asset in assets]))
+
+    def test_vscode_extension_requires_exact_manifest_identity_and_safe_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "extensions"
+            false_match = root / "github.copilot-helper-1.0.0"
+            long_version = root / "anthropic.claude-code-local"
+            false_match.mkdir(parents=True)
+            long_version.mkdir()
+            (false_match / "package.json").write_text(json.dumps({
+                "publisher": "github", "name": "copilot-helper", "version": "1.0.0",
+            }))
+            (long_version / "package.json").write_text(json.dumps({
+                "publisher": "anthropic", "name": "claude-code", "version": "x" * 129,
+            }))
+            with patch.object(detector, "_vscode_extension_roots", return_value=(("Code", root),)), \
+                 patch.object(detector, "scan_jetbrains_plugins", return_value=[]):
+                assets = detector.scan_editor_extensions()
+        self.assertEqual([(asset.name, asset.version) for asset in assets], [("Claude Code", None)])
+
+    def test_jetbrains_plugin_inventory_reads_only_candidate_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "JetBrains"
+            plugins = root / "Idea2026.1" / "plugins"
+            junie = plugins / "junie" / "lib"
+            unrelated = plugins / "unrelated" / "lib"
+            junie.mkdir(parents=True)
+            unrelated.mkdir(parents=True)
+            with zipfile.ZipFile(junie / "junie.jar", "w") as archive:
+                archive.writestr("META-INF/plugin.xml", """
+                    <idea-plugin><id>org.jetbrains.junie</id><name>Junie</name>
+                    <version>2.9</version></idea-plugin>
+                """)
+            with zipfile.ZipFile(unrelated / "unrelated.jar", "w") as archive:
+                archive.writestr("META-INF/plugin.xml", """
+                    <idea-plugin><id>example.other</id><name>Other</name></idea-plugin>
+                """)
+            with patch.object(detector, "_jetbrains_data_roots", return_value=(root,)):
+                assets = detector.scan_jetbrains_plugins()
+        self.assertEqual([(asset.name, asset.version, asset.metadata["package"])
+                          for asset in assets], [("Junie", "2.9", "org.jetbrains.junie")])
+        self.assertNotIn(str(root), json.dumps([asset.to_dict() for asset in assets]))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO test requires POSIX")
+    def test_jetbrains_direct_manifest_fifo_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            plugin = root / "junie"
+            (plugin / "META-INF").mkdir(parents=True)
+            os.mkfifo(plugin / "META-INF" / "plugin.xml")
+            self.assertIsNone(detector._plugin_manifest_xml(plugin, (root,)))
+
+    def test_jetbrains_unreadable_archive_manifest_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            plugin = root / "junie"
+            (plugin / "lib").mkdir(parents=True)
+            with zipfile.ZipFile(plugin / "lib" / "junie.jar", "w") as archive:
+                archive.writestr("META-INF/plugin.xml", "<idea-plugin />")
+            with patch.object(detector.zipfile.ZipFile, "read", side_effect=RuntimeError("encrypted")):
+                self.assertIsNone(detector._plugin_manifest_xml(plugin, (root,)))
 
     def test_binary_hashing_stays_inside_safe_roots(self):
         with tempfile.TemporaryDirectory() as directory:

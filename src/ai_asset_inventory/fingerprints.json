@@ -4,6 +4,41 @@
   "hash_algorithm": "sha256",
   "agents": [
     {
+      "name": "Google Antigravity CLI",
+      "vendor": "Google",
+      "executables": [
+        "agy",
+        "agy.exe"
+      ],
+      "package_markers": [
+        "antigravity-cli"
+      ],
+      "display_markers": [
+        "antigravity cli"
+      ],
+      "sources": [
+        "https://antigravity.google/docs/getting-started?tab=cli"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Google Antigravity IDE",
+      "vendor": "Google",
+      "executables": [
+        "agy-ide",
+        "agy-ide.exe"
+      ],
+      "package_markers": [],
+      "display_markers": [
+        "antigravity ide",
+        "agy-ide"
+      ],
+      "sources": [
+        "https://codelabs.developers.google.com/getting-started-agy-ide"
+      ],
+      "binary_fingerprints": []
+    },
+    {
       "name": "Kimi Code",
       "vendor": "Moonshot AI",
       "executables": [

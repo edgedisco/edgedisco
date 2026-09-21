@@ -4,6 +4,8 @@ All notable project changes are documented here.
 
 ## 0.5.0
 
+- Added distinct detection for Google Antigravity, Google Antigravity IDE, and Antigravity CLI without conflating them with Gemini CLI.
+- Added Kiro IDE plus bounded VS Code-family and JetBrains plugin inventory for supported coding agents.
 - Added Hermes Agent, OpenClaw, Kimi Code, Kilo Code, Mistral Vibe, Crush, Junie CLI, Auggie, Devin CLI, and hash-verified Factory Droid detection.
 - Hardened interpreter and package-runner classification with exact scoped-package matching, version-qualified package support, and prompt-text false-positive protections.
 - Added Windows executable-path collection for process identity and Factory Droid verification; native Windows validation remains pending.

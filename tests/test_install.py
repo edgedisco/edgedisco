@@ -21,6 +21,7 @@ from ai_asset_inventory.database import Database
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = (REPO / "install.sh").read_text()
+README = (REPO / "README.md").read_text()
 COMMANDS = ("server", "agent", "hook", "adapters", "setup", "status", "dashboard",
             "uninstall", "mcp", "demo")
 
@@ -32,6 +33,31 @@ def _free_port() -> int:
 
 
 class InstallerTests(unittest.TestCase):
+    def test_readme_uses_remote_stdin_one_liner(self):
+        self.assertIn(
+            "curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash",
+            README,
+        )
+
+    def test_stdin_install_without_terminal_requires_yes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            fake_bin = home / "bin"
+            fake_bin.mkdir()
+            uname = fake_bin / "uname"
+            uname.write_text("#!/bin/sh\necho Darwin\n")
+            uname.chmod(0o755)
+            result = subprocess.run(
+                ["/bin/bash", "-s"],
+                env=dict(os.environ, HOME=str(home), EDGEDISCO_HOME=str(home / ".edgedisco"),
+                         PYTHON_BIN=sys.executable,
+                         PATH=f"{fake_bin}:{os.environ.get('PATH', '')}"),
+                input=SCRIPT, capture_output=True, text=True, timeout=10,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rerun with --yes", result.stderr)
+        self.assertFalse((home / ".edgedisco").exists())
+
     def test_help_lists_every_option_and_override_without_installing(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)

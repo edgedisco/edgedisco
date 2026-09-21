@@ -6,12 +6,13 @@ EdgeDisco is an open-source collector and local dashboard for AI applications, c
 
 ## Try it
 
-On **macOS** or supported **systemd Linux**, with Python 3.9+ installed, download and inspect the [self-service installer](https://github.com/edgedisco/edgedisco/blob/main/install.sh):
+On **macOS**, supported **systemd Linux**, or **WSL with systemd enabled**, with Python 3.9+ installed:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
 ```
+
+Review the [self-service installer](https://github.com/edgedisco/edgedisco/blob/main/install.sh) before running it if required by your security policy.
 
 Open a new terminal, then run:
 
@@ -25,8 +26,8 @@ Linux self-service needs an active `systemd --user` session. See the [macOS](doc
 
 ## What it sees
 
-- Supported desktop AI apps, coding tools, local model runtimes, and agent frameworks.
-- Supported agent CLIs, including Claude Code, Codex, Gemini CLI, Hermes Agent, OpenClaw, Kimi Code, Kilo Code, Mistral Vibe, and others in the [detection catalog](https://github.com/edgedisco/edgedisco/blob/main/docs/detection-catalog.md).
+- Supported desktop AI apps, coding tools, local model runtimes, agent frameworks, and bounded editor-extension inventories.
+- Supported agent CLIs, including Claude Code, Codex, Gemini CLI, Google Antigravity CLI, Hermes Agent, OpenClaw, Kimi Code, Kilo Code, Mistral Vibe, and others in the [detection catalog](https://github.com/edgedisco/edgedisco/blob/main/docs/detection-catalog.md).
 - Current-user processes and parent relationships, plus supported MCP server configurations.
 - Sanitized session, subagent, tool, and MCP activity from optional Cursor, Claude Code, and GitHub Copilot hooks.
 

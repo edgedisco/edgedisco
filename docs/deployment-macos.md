@@ -49,7 +49,7 @@ The installer does not use `sudo` and does not request Full Disk Access, Accessi
 
 The services start whenever that user logs in. Credentials are stored with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent files.
 
-The collector stays inside `/Applications`, `~/Applications`, explicitly allowlisted executable directories, supported MCP configuration files, and current-user process metadata. It does not search Desktop, Documents, Downloads, iCloud Drive, network volumes, removable media, or other users' processes. Unreadable files are skipped without retrying with elevated privileges. macOS may show its normal Background Items notification when the per-user LaunchAgents are installed.
+The collector stays inside `/Applications`, `~/Applications`, explicitly allowlisted executable directories, standard per-user editor-extension/plugin directories, supported MCP configuration files, and current-user process metadata. It does not search Desktop, Documents, Downloads, iCloud Drive, network volumes, removable media, or other users' processes. Editor inventory reads only exact extension directory identities and bounded JetBrains plugin manifests; it does not read editor settings or projects. Unreadable files are skipped without retrying with elevated privileges. macOS may show its normal Background Items notification when the per-user LaunchAgents are installed.
 
 Use another local port if 8080 is already assigned:
 

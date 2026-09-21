@@ -10,15 +10,21 @@ import re
 import shlex
 import subprocess
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
 from .fingerprint_library import AGENT_FINGERPRINTS, LIBRARY_VERSION, known_binary, sha256_file
 from .models import Asset
-from .path_policy import allowed_path
+from .path_policy import allowed_path, open_regular_file, read_regular_file
 
 _APPLICATION_SIGNATURES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Google Antigravity IDE", "Google", ("antigravity ide", "agy-ide")),
+    ("Google Antigravity", "Google", ("google antigravity", "antigravity")),
+    ("Kiro IDE", "AWS", ("kiro", "kiro ide")),
     ("ChatGPT", "OpenAI", ("chatgpt", "openai.chat")),
     ("Claude", "Anthropic", ("claude", "anthropic")),
     ("Cursor", "Anysphere", ("cursor",)),
@@ -37,6 +43,29 @@ _APPLICATION_SIGNATURES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("MCP Server", "Unknown", ("mcp-server", "mcp_server", "@modelcontextprotocol", "server-filesystem", "server-postgres", "server-github")),
 )
 
+_VSCODE_EXTENSION_SIGNATURES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Claude Code", "Anthropic", ("anthropic.claude-code",)),
+    ("OpenAI Codex", "OpenAI", ("openai.chatgpt",)),
+    ("Cline", "Cline", ("saoudrizwan.claude-dev",)),
+    ("Continue", "Continue", ("continue.continue",)),
+    ("Kilo Code", "Kilo", ("kilocode.kilo-code",)),
+    ("Kimi Code", "Moonshot AI", ("moonshot-ai.kimi-code",)),
+    ("Augment Code", "Augment Code", ("augment.vscode-augment",)),
+    ("GitHub Copilot", "GitHub", ("github.copilot", "github.copilot-chat")),
+    ("Gemini Code Assist", "Google", ("google.geminicodeassist",)),
+    ("OpenCode", "Anomaly", ("sst-dev.opencode",)),
+)
+
+_JETBRAINS_PLUGIN_SIGNATURES: tuple[
+    tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[str, ...]], ...
+] = (
+    ("Junie", "JetBrains", ("org.jetbrains.junie",), ("junie",), ("junie",)),
+    ("Continue", "Continue", ("com.github.continuedev.continueintellijextension",),
+     ("continue",), ("continue", "continue-intellij-extension")),
+    ("Kilo Code", "Kilo", (), ("kilo code",),
+     ("kilo code", "kilo-code", "kilocode", "kilo.jetbrains")),
+)
+
 AGENT_CLI_SIGNATURES = tuple(
     (entry.name, entry.vendor, entry.executables, entry.package_markers)
     for entry in AGENT_FINGERPRINTS
@@ -51,7 +80,7 @@ AGENT_RUNTIME_NAMES = {
 }
 HOST_APP_NAMES = {
     "ChatGPT", "Claude", "Cursor", "GitHub Copilot", "Windsurf", "LM Studio",
-    "AnythingLLM", "Open WebUI", *AGENT_RUNTIME_NAMES,
+    "AnythingLLM", "Open WebUI", "Google Antigravity", "Kiro IDE", *AGENT_RUNTIME_NAMES,
 }
 
 
@@ -515,6 +544,219 @@ def scan_installed_apps() -> list[Asset]:
     return assets
 
 
+def _vscode_extension_roots() -> tuple[tuple[str, Path], ...]:
+    home = Path.home()
+    return (
+        ("Visual Studio Code", home / ".vscode" / "extensions"),
+        ("Visual Studio Code Insiders", home / ".vscode-insiders" / "extensions"),
+        ("Cursor", home / ".cursor" / "extensions"),
+        ("Windsurf", home / ".windsurf" / "extensions"),
+        ("VSCodium", home / ".vscode-oss" / "extensions"),
+    )
+
+
+def _installed_vscode_extensions() -> Iterable[tuple[str, str, str, str | None, Path]]:
+    roots = tuple(path for _editor, path in _vscode_extension_roots())
+    for editor, root in _vscode_extension_roots():
+        if allowed_path(root, roots) is None:
+            continue
+        obsolete: set[str] = set()
+        obsolete_path = allowed_path(root / ".obsolete", roots)
+        if obsolete_path is not None:
+            try:
+                raw_obsolete = read_regular_file(obsolete_path, max_bytes=262_144)
+                if raw_obsolete is not None:
+                    data = json.loads(raw_obsolete.decode("utf-8", errors="replace"))
+                    if isinstance(data, dict):
+                        obsolete = {str(key).lower() for key, value in data.items() if value is True}
+            except (UnicodeError, json.JSONDecodeError):
+                pass
+        try:
+            candidates = tuple(root.iterdir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            safe_path = allowed_path(candidate, roots)
+            if safe_path is None:
+                continue
+            try:
+                if not safe_path.is_dir():
+                    continue
+            except OSError:
+                continue
+            basename = candidate.name.lower()
+            if basename in obsolete:
+                continue
+            manifest_path = allowed_path(safe_path / "package.json", roots)
+            if manifest_path is None:
+                continue
+            raw_manifest = read_regular_file(manifest_path, max_bytes=262_144)
+            if raw_manifest is None:
+                continue
+            try:
+                manifest = json.loads(raw_manifest.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(manifest, dict):
+                continue
+            publisher = manifest.get("publisher")
+            extension_name = manifest.get("name")
+            version = manifest.get("version")
+            if not isinstance(publisher, str) or not isinstance(extension_name, str):
+                continue
+            manifest_id = f"{publisher}.{extension_name}".lower()
+            if version is not None and (not isinstance(version, str) or not version or len(version) > 128):
+                version = None
+            for name, vendor, extension_ids in _VSCODE_EXTENSION_SIGNATURES:
+                for extension_id in sorted(extension_ids, key=len, reverse=True):
+                    lowered_id = extension_id.lower()
+                    if manifest_id == lowered_id:
+                        yield name, vendor, extension_id, version, candidate
+                        break
+                else:
+                    continue
+                break
+
+
+def scan_editor_extensions() -> list[Asset]:
+    assets: list[Asset] = []
+    editor_by_root = {path: editor for editor, path in _vscode_extension_roots()}
+    for name, vendor, extension_id, version, path in _installed_vscode_extensions():
+        editor = editor_by_root.get(path.parent, "VS Code-compatible editor")
+        path_hash = digest(str(path))
+        assets.append(Asset(
+            fingerprint=digest(f"editor_extension:{name}:{editor}:{path_hash}"),
+            kind="application", name=name, vendor=vendor, version=version,
+            running=False, path_hash=path_hash,
+            metadata={
+                "package": extension_id,
+                "configured_in": editor,
+                "discovery_source": "Editor extension inventory",
+            },
+        ))
+    assets.extend(scan_jetbrains_plugins())
+    return assets
+
+
+def _jetbrains_data_roots() -> tuple[Path, ...]:
+    home = Path.home()
+    system = platform.system()
+    if system == "Darwin":
+        return (home / "Library" / "Application Support" / "JetBrains",)
+    if system == "Windows":
+        return (Path(os.environ.get("APPDATA", str(home))) / "JetBrains",)
+    return (home / ".local" / "share" / "JetBrains",)
+
+
+def _jetbrains_plugin_roots() -> tuple[Path, ...]:
+    roots = _jetbrains_data_roots()
+    found: list[Path] = []
+    for root in roots:
+        if allowed_path(root, roots) is None:
+            continue
+        try:
+            products = tuple(root.iterdir())
+        except OSError:
+            continue
+        for product in products:
+            plugins = allowed_path(product / "plugins", roots)
+            if plugins is not None:
+                found.append(product / "plugins")
+    return tuple(found)
+
+
+def _plugin_manifest_xml(plugin: Path, roots: tuple[Path, ...]) -> bytes | None:
+    direct = allowed_path(plugin / "META-INF" / "plugin.xml", roots)
+    if direct is not None:
+        data = read_regular_file(direct, max_bytes=131_072)
+        if data is not None:
+            return data
+    library = allowed_path(plugin / "lib", roots)
+    if library is None:
+        return None
+    try:
+        jars = tuple(islice(library.glob("*.jar"), 32))
+    except OSError:
+        return None
+    for jar in jars:
+        safe_jar = allowed_path(jar, roots)
+        if safe_jar is None:
+            continue
+        try:
+            with open_regular_file(safe_jar) as jar_handle:
+                with zipfile.ZipFile(jar_handle) as archive:
+                    info = archive.getinfo("META-INF/plugin.xml")
+                    if info.file_size > 131_072 or info.compress_size > 131_072:
+                        continue
+                    return archive.read(info)
+        except (OSError, EOFError, KeyError, RuntimeError, NotImplementedError,
+                zipfile.BadZipFile, zipfile.LargeZipFile):
+            continue
+    return None
+
+
+def _plugin_manifest_identity(data: bytes) -> tuple[str, str, str | None] | None:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return None
+    values: dict[str, str] = {}
+    for child in root:
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag in {"id", "name", "version"} and child.text:
+            values[tag] = child.text.strip()
+    plugin_name = values.get("name", "")
+    plugin_id = values.get("id", plugin_name)
+    version = values.get("version")
+    if (not plugin_id or not plugin_name or len(plugin_id) > 255 or
+            "/" in plugin_id or "\\" in plugin_id):
+        return None
+    if version is not None and (not version or len(version) > 128):
+        version = None
+    return plugin_id, plugin_name, version
+
+
+def scan_jetbrains_plugins() -> list[Asset]:
+    assets: list[Asset] = []
+    roots = _jetbrains_data_roots()
+    for plugin_root in _jetbrains_plugin_roots():
+        try:
+            plugins = tuple(plugin_root.iterdir())
+        except OSError:
+            continue
+        for plugin in plugins:
+            basename = plugin.name.lower()
+            signatures = [signature for signature in _JETBRAINS_PLUGIN_SIGNATURES
+                          if any(basename == alias or basename.startswith(alias + "-")
+                                 for alias in signature[4])]
+            if not signatures:
+                continue
+            safe_plugin = allowed_path(plugin, roots)
+            if safe_plugin is None:
+                continue
+            manifest = _plugin_manifest_xml(safe_plugin, roots)
+            identity = _plugin_manifest_identity(manifest) if manifest is not None else None
+            if identity is None:
+                continue
+            plugin_id, display_name, version = identity
+            for name, vendor, ids, names, _aliases in signatures:
+                if plugin_id.lower() not in ids and display_name.lower() not in names:
+                    continue
+                path_hash = digest(str(plugin))
+                assets.append(Asset(
+                    fingerprint=digest(f"jetbrains_plugin:{name}:{path_hash}"),
+                    kind="application", name=name, vendor=vendor, version=version,
+                    running=False, path_hash=path_hash,
+                    metadata={
+                        "package": plugin_id,
+                        "configured_in": "JetBrains IDE",
+                        "discovery_source": "Editor plugin inventory",
+                    },
+                ))
+                break
+    return assets
+
+
 def _executable_roots() -> tuple[Path, ...]:
     home = Path.home()
     roots = [
@@ -531,7 +773,7 @@ def _executable_roots() -> tuple[Path, ...]:
     if platform.system() == "Windows":
         appdata = Path(os.environ.get("APPDATA", str(home)))
         localappdata = Path(os.environ.get("LOCALAPPDATA", str(home)))
-        roots.extend((appdata / "npm", localappdata / "Programs"))
+        roots.extend((appdata / "npm", localappdata / "Programs", localappdata / "agy" / "bin"))
     return tuple(roots)
 
 
@@ -700,12 +942,19 @@ def _merge_inventory(assets: Iterable[Asset]) -> list[Asset]:
 
 def scan_static_inventory() -> list[Asset]:
     """Scan evidence that changes much less often than the process table."""
-    return _merge_inventory((*scan_installed_apps(), *scan_installed_clis(), *scan_mcp_configs()))
+    return _merge_inventory((
+        *scan_installed_apps(), *scan_installed_clis(), *scan_editor_extensions(),
+        *scan_mcp_configs(),
+    ))
 
 
 def _static_watch_paths() -> tuple[Path, ...]:
     """Return bounded paths whose metadata cheaply signals a likely static change."""
-    paths = [*_application_roots(), *_executable_roots()]
+    paths = [
+        *_application_roots(), *_executable_roots(),
+        *(path for _editor, path in _vscode_extension_roots()),
+        *_jetbrains_data_roots(), *_jetbrains_plugin_roots(),
+    ]
     for _owner, path in _mcp_candidates():
         paths.extend((path, path.parent))
     return tuple(dict.fromkeys(paths))
@@ -714,6 +963,8 @@ def _static_watch_paths() -> tuple[Path, ...]:
 def _static_revision() -> tuple[tuple[str, int | None, int | None, int | None, int | None], ...]:
     revision = []
     roots = (*_application_roots(), *_hash_roots(),
+             *(path for _editor, path in _vscode_extension_roots()),
+             *_jetbrains_data_roots(),
              *(p.parent for _owner, p in _mcp_candidates()))
     for path in _static_watch_paths():
         try:

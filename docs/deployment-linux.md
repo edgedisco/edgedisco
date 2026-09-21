@@ -51,7 +51,7 @@ systemctl --user status com.edgedisco.agent.service
 
 `edgedisco dashboard` creates a single-use authenticated local browser session without printing the administrator token. `edgedisco demo` optionally adds clearly labeled synthetic evidence.
 
-Linux discovery includes the current user's process table, bounded CLI locations, `.desktop` entries under `/usr/share/applications` and `~/.local/share/applications`, and supported MCP configuration paths. It does not recursively crawl the filesystem or require audit, eBPF, `ptrace`, or elevated permissions.
+Linux discovery includes the current user's process table, bounded CLI locations, `.desktop` entries under `/usr/share/applications` and `~/.local/share/applications`, standard per-user editor-extension/plugin directories, and supported MCP configuration paths. Editor inventory reads only exact extension directory identities and bounded JetBrains plugin manifests. It does not recursively crawl the filesystem or require audit, eBPF, `ptrace`, or elevated permissions.
 
 ## Service lifecycle and logs
 

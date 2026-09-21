@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import os
 import stat
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import BinaryIO, Iterable, Iterator
 
 
 def allowed_path(path: Path, roots: Iterable[Path]) -> Path | None:
@@ -29,3 +30,62 @@ def allowed_path(path: Path, roots: Iterable[Path]) -> Path | None:
         except (OSError, ValueError):
             return None
     return None
+
+
+@contextmanager
+def open_regular_file(path: Path) -> Iterator[BinaryIO]:
+    """Open a regular file without following a swapped final symlink or blocking on a FIFO."""
+    parent_fd = None
+    descriptor = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        if os.name == "posix":
+            parent_fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+            for part in path.parts[1:-1]:
+                child = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent_fd,
+                )
+                os.close(parent_fd)
+                parent_fd = child
+            descriptor = os.open(path.name, flags, dir_fd=parent_fd)
+        else:
+            flags |= getattr(os, "O_BINARY", 0)
+            descriptor = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        stream = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with stream:
+            yield stream
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def read_regular_file(path: Path, *, max_bytes: int) -> bytes | None:
+    """Read at most max_bytes from a regular file, rejecting oversized or changing files."""
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
+            return None
+        with open_regular_file(path) as handle:
+            opened = os.fstat(handle.fileno())
+            if (opened.st_dev, opened.st_ino, opened.st_size) != (
+                before.st_dev, before.st_ino, before.st_size,
+            ):
+                return None
+            data = handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
+        if len(data) > max_bytes or (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ) != (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+        ):
+            return None
+        return data
+    except (OSError, RuntimeError):
+        return None

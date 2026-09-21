@@ -144,7 +144,16 @@ EdgeDisco will:
 It does not collect prompts, responses, source code, tool arguments, credentials,
 screenshots, browser history, or raw command lines.
 NOTICE
-  read -r -p "Continue? [y/N] " answer
+  if [[ -t 0 || -n "${BASH_EXECUTION_STRING:-}" ||
+        ( -n "${BASH_SOURCE[0]-}" && -f "${BASH_SOURCE[0]}" ) ]]; then
+    if ! read -r -p "Continue? [y/N] " answer; then
+      echo "Interactive confirmation requires input; rerun with --yes for unattended installation." >&2
+      exit 1
+    fi
+  elif ! read -r -p "Continue? [y/N] " answer </dev/tty; then
+    echo "Interactive confirmation requires a terminal; rerun with --yes for unattended installation." >&2
+    exit 1
+  fi
   [[ "$answer" =~ ^[Yy]$ ]] || { echo "Installation cancelled."; exit 1; }
 fi
 

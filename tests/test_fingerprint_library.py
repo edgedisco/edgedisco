@@ -26,6 +26,13 @@ class FingerprintLibraryTests(unittest.TestCase):
         self.assertEqual(entries["OpenClaw"].vendor, "OpenClaw")
         self.assertIn("openclaw", entries["OpenClaw"].executables)
 
+    def test_google_antigravity_surfaces_are_distinct_from_gemini_cli(self):
+        entries = {entry.name: entry for entry in fingerprint_library.AGENT_FINGERPRINTS}
+        self.assertIn("gemini", entries["Gemini CLI"].executables)
+        self.assertIn("agy", entries["Google Antigravity CLI"].executables)
+        self.assertIn("agy-ide", entries["Google Antigravity IDE"].executables)
+        self.assertEqual(entries["Google Antigravity CLI"].vendor, "Google")
+
     def test_file_sha256_matches_bytes_and_changes_after_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory).resolve() / "agent"
