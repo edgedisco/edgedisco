@@ -19,6 +19,23 @@ from .self_service import (AGENT_LABEL, SERVER_LABEL, _health, _launchctl, _pars
                            _systemctl, _wait_for_server)
 
 
+def _database_version(path: Path) -> int:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(
+            f"Cannot read existing EdgeDisco database at {path}: expected a regular file. "
+            "Check its type, ownership, and permissions before reinstalling."
+        )
+    try:
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as conn:
+            return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except (OSError, sqlite3.Error) as exc:
+        raise RuntimeError(
+            f"Cannot open existing EdgeDisco database at {path}. "
+            "Check ownership and permissions on the file and its parent directories; "
+            "the installer will not replace an unreadable database."
+        ) from exc
+
+
 def targets(root: Path, home: Path) -> dict[str, Path]:
     result = {name: root / name for name in (
         "agent.json", "server.env", "venv", "bin", "cli-launcher.path", "data/inventory.db",
@@ -41,11 +58,16 @@ def _copy(source: Path, destination: Path) -> None:
     elif source.is_dir():
         shutil.copytree(source, destination, symlinks=True)
     elif source.name == "inventory.db":
-        with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as original:
-            with sqlite3.connect(destination) as saved:
-                original.backup(saved)
-        original.close()
-        saved.close()
+        try:
+            with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as original:
+                with sqlite3.connect(destination) as saved:
+                    original.backup(saved)
+        except (OSError, sqlite3.Error) as exc:
+            raise RuntimeError(
+                f"Cannot back up existing EdgeDisco database at {source}. "
+                "Check ownership, permissions, and available disk space; "
+                "the installer has left the existing database in place."
+            ) from exc
         destination.chmod(0o600)
     else:
         shutil.copy2(source, destination)
@@ -58,9 +80,7 @@ def snapshot(root: Path, home: Path, *, quiesce: bool = False) -> Path:
     load_config(root / "agent.json")  # Fail before modifying any installation files.
     db = root / "data/inventory.db"
     if db.exists():
-        with sqlite3.connect(db.as_uri() + "?mode=ro", uri=True) as conn:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-        conn.close()
+        version = _database_version(db)
         if version > DATABASE_VERSION:
             raise RuntimeError("Database requires a newer EdgeDisco release; refusing downgrade")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -210,12 +230,15 @@ def main() -> None:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--backup", type=Path)
     args = parser.parse_args()
-    if args.action == "snapshot":
-        print(snapshot(args.root, Path.home(), quiesce=True))
-    elif args.action == "stop":
-        stop_services(args.root)
-    else:
-        restore(args.backup)
+    try:
+        if args.action == "snapshot":
+            print(snapshot(args.root, Path.home(), quiesce=True))
+        elif args.action == "stop":
+            stop_services(args.root)
+        else:
+            restore(args.backup)
+    except RuntimeError as exc:
+        parser.exit(1, f"EdgeDisco upgrade error: {exc}\n")
 
 
 if __name__ == "__main__":

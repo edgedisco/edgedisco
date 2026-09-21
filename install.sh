@@ -156,6 +156,7 @@ if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
   if [[ -f "$SCRIPT_DIR/pyproject.toml" && -d "$SCRIPT_DIR/src/ai_asset_inventory" ]]; then
     PACKAGE_SOURCE="$SCRIPT_DIR"
+    echo "Using local EdgeDisco source checkout: $PACKAGE_SOURCE"
   fi
 fi
 TEMP_DIR="$(/usr/bin/mktemp -d)"
@@ -197,7 +198,9 @@ if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
 fi
 
 echo "Installing EdgeDisco..."
-"$VENV_PYTHON" -m pip install --upgrade "$PACKAGE_SOURCE"
+# The project version may stay constant between source-archive updates. Force
+# replacement so a rerun actually installs the downloaded detector catalog.
+"$VENV_PYTHON" -m pip install --upgrade --force-reinstall "$PACKAGE_SOURCE"
 CLI="$INSTALL_ROOT/venv/bin/edgedisco"
 "$CLI" --help >/dev/null
 for command in server agent hook adapters setup status dashboard uninstall mcp demo; do

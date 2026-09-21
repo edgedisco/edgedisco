@@ -301,6 +301,13 @@ class InstallerTests(unittest.TestCase):
                 config = json.loads((root / "agent.json").read_text())
                 device_token = config["device_token"]
 
+                # A same-version rerun must replace package data from the new
+                # source instead of letting pip report it as already satisfied.
+                installed_catalog = Path(source).parent / "fingerprints.json"
+                expected_catalog = (REPO / "src/ai_asset_inventory/fingerprints.json").read_text()
+                installed_catalog.write_text("stale-test-catalog")
+                self.assertIn("stale-test-catalog", installed_catalog.read_text())
+
                 # Verification must not source arbitrary shell startup files.
                 # A user alias can shadow PATH later, but must not be executed by
                 # an installer rerun or make the managed installation fail.
@@ -312,6 +319,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(shadowed.returncode, 0, shadowed.stdout + shadowed.stderr)
                 self.assertIn("EdgeDisco installation verified.", shadowed.stdout)
                 self.assertNotIn("old-shadow", shadowed.stdout + shadowed.stderr)
+                self.assertEqual(installed_catalog.read_text(), expected_catalog)
                 (home / ".zshrc").unlink()
 
                 demo = subprocess.run([str(managed), "demo"], env=env, capture_output=True,
@@ -351,6 +359,8 @@ class InstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(local.returncode, 0, local.stderr)
                 self.assertIn("EdgeDisco installation verified.", local.stdout)
+                self.assertIn(f"Using local EdgeDisco source checkout: {REPO}", local.stdout)
+                self.assertNotIn("Downloading EdgeDisco source archive", local.stdout)
                 self.assertNotIn("Another edgedisco command", local.stdout)
                 self.assertEqual(evidence.read_text(), "preserve")
                 self.assertIn(f"AAI_ADMIN_TOKEN={admin_token}", (root / "server.env").read_text())

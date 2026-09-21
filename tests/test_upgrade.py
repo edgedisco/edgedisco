@@ -1,14 +1,17 @@
+import io
 import json
 import sqlite3
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
 from ai_asset_inventory.configuration import load_config, migrate_config
 from ai_asset_inventory.database import Database, DATABASE_VERSION, utc_now
 from ai_asset_inventory.self_service import default_layout, setup_macos
-from ai_asset_inventory.upgrade import snapshot, restore
+from ai_asset_inventory.upgrade import main, snapshot, restore
 from ai_asset_inventory.adapters import install_cursor, install_claude, install_copilot
 from ai_asset_inventory.runtime import normalize_hook_event
 
@@ -64,6 +67,32 @@ class UpgradeTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "disk full"):
                 snapshot(self.root, self.home, quiesce=True)
         start.assert_called_once_with(self.home.resolve())
+
+    def test_unreadable_existing_database_fails_with_recovery_guidance(self):
+        db = self.root / "data/inventory.db"
+        db.parent.mkdir()
+        db.touch()
+        with patch("ai_asset_inventory.upgrade.sqlite3.connect",
+                   side_effect=sqlite3.OperationalError("unable to open database file")):
+            with self.assertRaisesRegex(RuntimeError, "ownership and permissions"):
+                snapshot(self.root, self.home)
+        self.assertFalse((self.root / "backups").exists())
+
+        error = io.StringIO()
+        with patch.object(sys, "argv", ["upgrade", "snapshot", "--root", str(self.root)]), \
+             patch("ai_asset_inventory.upgrade.snapshot",
+                   side_effect=RuntimeError("Cannot open existing EdgeDisco database")), \
+             redirect_stderr(error), self.assertRaises(SystemExit) as stopped:
+            main()
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertIn("EdgeDisco upgrade error", error.getvalue())
+        self.assertNotIn("Traceback", error.getvalue())
+
+    def test_existing_database_path_must_be_a_regular_file(self):
+        db = self.root / "data/inventory.db"
+        db.mkdir(parents=True)
+        with self.assertRaisesRegex(RuntimeError, "expected a regular file"):
+            snapshot(self.root, self.home)
 
     def test_changed_hook_paths_replace_managed_commands(self):
         for installer in (install_cursor, install_claude, install_copilot):
