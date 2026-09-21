@@ -162,6 +162,8 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_inventory_sync_device
                     ON inventory_sync_changes(device_id,asset_key,seq);
+                CREATE INDEX IF NOT EXISTS idx_inventory_sync_asset
+                    ON inventory_sync_changes(asset_key,seq);
             """)
             if version < 2:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
@@ -172,6 +174,10 @@ class Database:
                 ):
                     if column.split()[0] not in columns:
                         conn.execute(f"ALTER TABLE assets ADD COLUMN {column}")
+            # Seed retained inventory under the migration's writer reservation,
+            # before any new upload can make the change log nonempty.
+            from .inventory_sync import bootstrap
+            bootstrap(conn)
             # DDL and the version marker commit together; failed migrations
             # roll back together.
             conn.execute(f"PRAGMA user_version={DATABASE_VERSION}")

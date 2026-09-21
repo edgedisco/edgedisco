@@ -13,8 +13,24 @@ def bootstrap(conn: sqlite3.Connection) -> None:
     """Seed an existing installation once from its retained current inventory."""
     if conn.execute("SELECT 1 FROM inventory_sync_changes LIMIT 1").fetchone():
         return
-    rows = conn.execute("""SELECT device_id,kind,name,vendor,running,last_seen,metadata_json
-        FROM assets ORDER BY device_id,last_seen DESC,fingerprint DESC""").fetchall()
+    # Historical rows survive deletion. Only the latest scan's timestamp can
+    # establish membership; equal-timestamp scans may leave an ambiguous union.
+    # In that case wait for a fresh upload instead of resurrecting old assets.
+    rows = conn.execute("""WITH ranked_scans AS (
+            SELECT device_id,observed_at,asset_count,
+                ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY
+                    observed_at DESC,received_at DESC,rowid DESC) AS rank
+            FROM scans
+            WHERE julianday(observed_at)<=julianday(received_at,'+5 minutes')
+        ), latest AS (
+            SELECT device_id,observed_at,asset_count FROM ranked_scans WHERE rank=1
+        )
+        SELECT a.device_id,a.kind,a.name,a.vendor,a.running,a.last_seen,a.metadata_json
+        FROM assets a
+        JOIN latest ON latest.device_id=a.device_id AND latest.observed_at=a.last_seen
+        WHERE latest.asset_count=(SELECT COUNT(*) FROM assets current
+            WHERE current.device_id=a.device_id AND current.last_seen=latest.observed_at)
+        ORDER BY a.device_id,a.fingerprint DESC""").fetchall()
     by_device: dict[str, list[dict[str, Any]]] = {}
     observed: dict[str, str] = {}
     for row in rows:
@@ -39,7 +55,10 @@ def record_scan_changes(conn: sqlite3.Connection, device_id: str,
         if projected is None:
             continue
         key, state_hash, event = projected
-        if key in current:
+        old_projection = current.get(key)
+        if (old_projection is not None
+                and (old_projection[1]["attributes"]["asset.running"]
+                     or not event["attributes"]["asset.running"])):
             continue
         current[key] = (state_hash, {
             "source": "edgedisco", "source_asset_id": key,

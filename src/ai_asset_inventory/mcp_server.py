@@ -7,7 +7,7 @@ from typing import Any
 
 from . import __version__
 from .database import Database, utc_now
-from .inventory_sync import bootstrap, changes, snapshot
+from .inventory_sync import changes, snapshot
 
 
 class AuditLog:
@@ -104,7 +104,6 @@ def create_server(db_path: Path, audit_path: Path | None = None):
                            limit: int = 100) -> dict[str, Any]:
         """Page through privacy-safe assets. Reuse watermark on every page."""
         with database.connect() as conn:
-            bootstrap(conn)
             result = snapshot(conn, watermark=watermark, after=after, limit=limit)
         audit.record("inventory_snapshot", {"watermark": watermark, "after": after,
                                            "limit": limit}, len(result["items"]))
@@ -114,7 +113,6 @@ def create_server(db_path: Path, audit_path: Path | None = None):
     def inventory_changes(cursor: int = 0, limit: int = 100) -> dict[str, Any]:
         """Read ordered asset upserts and deletions after a cursor."""
         with database.connect() as conn:
-            bootstrap(conn)
             result = changes(conn, cursor=cursor, limit=limit)
         audit.record("inventory_changes", {"cursor": cursor, "limit": limit},
                      len(result["items"]))
