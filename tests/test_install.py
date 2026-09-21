@@ -33,9 +33,14 @@ def _free_port() -> int:
 
 
 class InstallerTests(unittest.TestCase):
-    def test_readme_downloads_complete_installer_before_running_it(self):
+    def test_readme_documents_streamed_and_downloaded_installers(self):
+        self.assertIn(
+            "curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash",
+            README,
+        )
         self.assertIn(
             "curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh\n"
+            "less install.sh\n"
             "bash install.sh",
             README,
         )

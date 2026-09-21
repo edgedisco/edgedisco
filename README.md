@@ -9,11 +9,19 @@ EdgeDisco is an open-source collector and local dashboard for AI applications, c
 On **macOS**, supported **systemd Linux**, or **WSL with systemd enabled**, with Python 3.9+ installed:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
+```
+
+To download and inspect the complete installer before running it, use:
+
+```bash
 curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
+less install.sh
 bash install.sh
 ```
 
-Review the [self-service installer](https://github.com/edgedisco/edgedisco/blob/main/install.sh) before running it if required by your security policy.
+The download-first form is also easier to troubleshoot if a network proxy interrupts streamed
+responses. You can review the [self-service installer](https://github.com/edgedisco/edgedisco/blob/main/install.sh) in the repository before running either form.
 
 Open a new terminal, then run:
 
