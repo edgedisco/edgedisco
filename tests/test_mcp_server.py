@@ -2,6 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import patch
+import sys
 
 from ai_asset_inventory.database import Database
 from ai_asset_inventory.mcp_server import AuditLog, create_server
@@ -13,6 +16,37 @@ except ImportError:
 
 
 class MCPServerTests(unittest.TestCase):
+    def test_inventory_sync_tools_are_registered_and_callable(self):
+        class FakeMCPServer:
+            def __init__(self, *args, **kwargs):
+                self.tools = {}
+
+            def tool(self):
+                def register(fn):
+                    self.tools[fn.__name__] = fn
+                    return fn
+                return register
+
+        fake_server = ModuleType("mcp.server")
+        fake_server.MCPServer = FakeMCPServer
+        fake_mcp = ModuleType("mcp")
+        fake_mcp.server = fake_server
+        with tempfile.TemporaryDirectory() as temp:
+            database_path = Path(temp) / "inventory.db"
+            database = Database(database_path)
+            device_id, _ = database.enroll({"hostname": "host", "os": "Darwin"})
+            database.ingest(device_id, {"scan_id": "one", "observed_at":
+                "2026-09-20T00:00:00+00:00", "assets": [{
+                    "fingerprint": "one", "kind": "agent_runtime", "name": "CrewAI",
+                    "vendor": "CrewAI", "running": True,
+                    "metadata": {"host_app": "Cursor", "relationship": "spawned_by"}}]})
+            with patch.dict(sys.modules, {"mcp": fake_mcp, "mcp.server": fake_server}):
+                server = create_server(database_path)
+            snap = server.tools["inventory_snapshot"]()
+            self.assertEqual(len(snap["items"]), 1)
+            delta = server.tools["inventory_changes"]()
+            self.assertEqual(delta["items"][0]["operation"], "upsert")
+
     def test_audit_log_contains_only_tool_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "audit.jsonl"

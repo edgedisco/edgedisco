@@ -151,6 +151,19 @@ class Database:
                     last_dropped_at TEXT, last_drop_reason TEXT
                 );
                 INSERT OR IGNORE INTO otlp_export_status(id) VALUES(1);
+                CREATE TABLE IF NOT EXISTS inventory_sync_changes (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_key TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    state_hash TEXT NOT NULL,
+                    present INTEGER NOT NULL,
+                    payload_json TEXT,
+                    observed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_inventory_sync_device
+                    ON inventory_sync_changes(device_id,asset_key,seq);
+                CREATE INDEX IF NOT EXISTS idx_inventory_sync_asset
+                    ON inventory_sync_changes(asset_key,seq);
             """)
             if version < 2:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
@@ -161,6 +174,10 @@ class Database:
                 ):
                     if column.split()[0] not in columns:
                         conn.execute(f"ALTER TABLE assets ADD COLUMN {column}")
+            # Seed retained inventory under the migration's writer reservation,
+            # before any new upload can make the change log nonempty.
+            from .inventory_sync import bootstrap
+            bootstrap(conn)
             # DDL and the version marker commit together; failed migrations
             # roll back together.
             conn.execute(f"PRAGMA user_version={DATABASE_VERSION}")
@@ -231,6 +248,13 @@ class Database:
                       item.get("fingerprint_library_version"),
                       json.dumps(item.get("metadata", {}), sort_keys=True),
                       1 if item.get("running") else 0, observed_at, observed_at))
+            conn.execute("SAVEPOINT inventory_sync_projection")
+            try:
+                self._queue_inventory_sync_changes(conn, device_id, observed_at, assets)
+                conn.execute("RELEASE SAVEPOINT inventory_sync_projection")
+            except (sqlite3.Error, TypeError, ValueError):
+                conn.execute("ROLLBACK TO SAVEPOINT inventory_sync_projection")
+                conn.execute("RELEASE SAVEPOINT inventory_sync_projection")
             if self.otlp_enabled:
                 conn.execute("SAVEPOINT otlp_projection")
                 try:
@@ -247,6 +271,12 @@ class Database:
                     conn.execute("ROLLBACK TO SAVEPOINT otlp_projection")
                     conn.execute("RELEASE SAVEPOINT otlp_projection")
         return len(assets)
+
+    @staticmethod
+    def _queue_inventory_sync_changes(conn: sqlite3.Connection, device_id: str,
+                                      observed_at: str, assets: list[dict[str, Any]]) -> None:
+        from .inventory_sync import record_scan_changes
+        record_scan_changes(conn, device_id, observed_at, assets)
 
     @staticmethod
     def _drop_outbox_row(conn: sqlite3.Connection, row: sqlite3.Row, now: str, reason: str) -> None:
