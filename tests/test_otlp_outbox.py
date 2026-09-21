@@ -15,7 +15,7 @@ SENTINELS = (
 )
 
 
-def asset(*, running=True, simulated=False, name="CrewAI", fingerprint="runtime-1"):
+def asset(*, running=True, simulated=False, name="CrewAI", fingerprint="runtime-1", version=None):
     metadata = {
         "host_app": "Cursor", "relationship": "spawned_by",
         "prompt": SENTINELS[1], "response": SENTINELS[2],
@@ -27,7 +27,7 @@ def asset(*, running=True, simulated=False, name="CrewAI", fingerprint="runtime-
         metadata.update(demo_lab=True, evidence_label="SIMULATED TEST WORKLOADS")
     return {
         "fingerprint": fingerprint, "kind": "agent_runtime", "name": name,
-        "vendor": "CrewAI", "running": running,
+        "vendor": "CrewAI", "version": version, "running": running,
         "path_hash": SENTINELS[5], "command_hash": SENTINELS[3],
         "metadata": metadata, "credentials": SENTINELS[0],
         "prompt": SENTINELS[1], "response": SENTINELS[2],
@@ -65,7 +65,9 @@ class OtlpOutboxTests(unittest.TestCase):
         self.assertEqual(self.db.ingest(self.device_id, report("one", [asset()])), 1)
         row = self.rows()[0]
         payload = json.loads(row["payload_json"])
-        self.assertEqual(set(payload), {"timestamp", "event.name", "resource", "attributes"})
+        self.assertEqual(set(payload), {
+            "timestamp", "recorded_at", "event.name", "resource", "attributes",
+        })
         self.assertEqual(payload["resource"], {"service.name": "edgedisco"})
         self.assertEqual(payload["event.name"], "edgedisco.asset.observed")
         self.assertEqual(set(payload["attributes"]), {
@@ -108,6 +110,14 @@ class OtlpOutboxTests(unittest.TestCase):
         self.assertEqual(self.dropped()["dropped_events_total"], 1)
         self.db.ingest(self.device_id, report("four", [asset(running=False)]))
         self.assertEqual(self.rows()[0]["id"], rows[0]["id"])
+
+    def test_version_change_is_an_exported_state_change(self):
+        self.db.ingest(self.device_id, report("version-one", [asset(version="1.0")]))
+        first = self.rows()[0]["id"]
+        self.db.ingest(self.device_id, report("version-two", [asset(version="2.0")]))
+        row = self.rows()[0]
+        self.assertNotEqual(row["id"], first)
+        self.assertEqual(json.loads(row["payload_json"])["attributes"]["asset.version"], "2.0")
 
     def test_capacity_and_age_drop_only_outbound_evidence(self):
         self.db = Database(self.path, otlp_enabled=True, otlp_max_pending=1, otlp_max_age_days=1)

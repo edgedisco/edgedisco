@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from . import __version__
 from .database import Database, utc_now
 from .inventory_sync import changes, snapshot
+
+
+Result = TypeVar("Result")
+READ_ONLY_TOOL = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "openWorldHint": False,
+}
 
 
 class AuditLog:
@@ -15,13 +23,17 @@ class AuditLog:
         self.path = path
         self.lock = threading.Lock()
 
-    def record(self, tool: str, arguments: dict[str, Any], result_count: int) -> None:
+    def record(self, tool: str, arguments: dict[str, Any], result_count: int | None,
+               *, outcome: str = "success", error_type: str | None = None) -> None:
         entry = {
             "observed_at": utc_now(),
             "tool": tool,
             "arguments": arguments,
             "result_count": result_count,
+            "outcome": outcome,
         }
+        if error_type is not None:
+            entry["error_type"] = error_type
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock, self.path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -47,76 +59,97 @@ def create_server(db_path: Path, audit_path: Path | None = None):
         ),
     )
 
-    @mcp.tool()
+    def audited(tool: str, arguments: dict[str, Any],
+                operation: Callable[[], Result]) -> Result:
+        try:
+            result = operation()
+        except Exception as exc:
+            audit.record(tool, arguments, None, outcome="error", error_type=type(exc).__name__)
+            raise
+        if isinstance(result, dict) and isinstance(result.get("items"), list):
+            result_count = len(result["items"])
+        else:
+            result_count = len(result) if isinstance(result, (dict, list)) else 1
+        audit.record(tool, arguments, result_count)
+        return result
+
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def get_compliance_summary() -> dict[str, int]:
         """Return fleet-level counts for devices, AI assets, agents, sessions, and MCP servers."""
-        result = database.compliance_counts()
-        audit.record("get_compliance_summary", {}, len(result))
-        return result
+        return audited("get_compliance_summary", {}, database.compliance_counts)
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_devices(limit: int = 100) -> list[dict[str, Any]]:
         """List enrolled devices and their last-seen metadata. Maximum 500 records."""
-        result = database.list_devices(limit)
-        audit.record("list_devices", {"limit": limit}, len(result))
-        return result
+        return audited("list_devices", {"limit": limit}, lambda: database.list_devices(limit))
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_ai_assets(kind: str | None = None, running_only: bool = False,
                        limit: int = 100) -> list[dict[str, Any]]:
         """List sanitized AI asset inventory, optionally filtered by type or running state."""
-        result = database.list_assets(kind=kind, running_only=running_only, limit=limit)
-        audit.record(
-            "list_ai_assets",
-            {"kind": kind, "running_only": running_only, "limit": limit},
-            len(result),
+        arguments = {"kind": kind, "running_only": running_only, "limit": limit}
+        return audited(
+            "list_ai_assets", arguments,
+            lambda: database.list_assets(kind=kind, running_only=running_only, limit=limit),
         )
-        return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_running_agents(limit: int = 100) -> list[dict[str, Any]]:
         """List currently observed agent runtimes and their host-device metadata."""
-        result = database.list_assets(kind="agent_runtime", running_only=True, limit=limit)
-        audit.record("list_running_agents", {"limit": limit}, len(result))
-        return result
+        return audited(
+            "list_running_agents", {"limit": limit},
+            lambda: database.list_assets(kind="agent_runtime", running_only=True, limit=limit),
+        )
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_agent_sessions(status: str | None = None, app: str | None = None,
                             limit: int = 100) -> list[dict[str, Any]]:
         """List sanitized agent sessions, optionally filtered by status or host application."""
-        result = database.list_agent_sessions(status=status, app=app, limit=limit)
-        audit.record(
-            "list_agent_sessions",
-            {"status": status, "app": app, "limit": limit},
-            len(result),
+        arguments = {"status": status, "app": app, "limit": limit}
+        return audited(
+            "list_agent_sessions", arguments,
+            lambda: database.list_agent_sessions(status=status, app=app, limit=limit),
         )
-        return result
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def list_mcp_servers(limit: int = 100) -> list[dict[str, Any]]:
         """List discovered MCP servers without arguments, environment values, or credentials."""
-        result = database.list_assets(kind="mcp_server", limit=limit)
-        audit.record("list_mcp_servers", {"limit": limit}, len(result))
-        return result
+        return audited(
+            "list_mcp_servers", {"limit": limit},
+            lambda: database.list_assets(kind="mcp_server", limit=limit),
+        )
 
-    @mcp.tool()
+    @mcp.tool(annotations=READ_ONLY_TOOL)
+    def inventory_device_status(after: str = "", limit: int = 100) -> dict[str, Any]:
+        """Page inventory-report freshness by device ID. Maximum 500 records per page."""
+        arguments = {"after": after, "limit": limit}
+        return audited(
+            "inventory_device_status", arguments,
+            lambda: database.inventory_device_status(after=after, limit=limit),
+        )
+
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def inventory_snapshot(watermark: int | None = None, after: str = "",
                            limit: int = 100) -> dict[str, Any]:
         """Page through privacy-safe assets. Reuse watermark on every page."""
-        with database.connect() as conn:
-            result = snapshot(conn, watermark=watermark, after=after, limit=limit)
-        audit.record("inventory_snapshot", {"watermark": watermark, "after": after,
-                                           "limit": limit}, len(result["items"]))
-        return result
+        arguments = {"watermark": watermark, "after": after, "limit": limit}
 
-    @mcp.tool()
+        def operation() -> dict[str, Any]:
+            with database.connect() as conn:
+                return snapshot(conn, watermark=watermark, after=after, limit=limit)
+
+        return audited("inventory_snapshot", arguments, operation)
+
+    @mcp.tool(annotations=READ_ONLY_TOOL)
     def inventory_changes(cursor: int = 0, limit: int = 100) -> dict[str, Any]:
         """Read ordered asset upserts and deletions after a cursor."""
-        with database.connect() as conn:
-            result = changes(conn, cursor=cursor, limit=limit)
-        audit.record("inventory_changes", {"cursor": cursor, "limit": limit},
-                     len(result["items"]))
-        return result
+        arguments = {"cursor": cursor, "limit": limit}
+
+        def operation() -> dict[str, Any]:
+            with database.connect() as conn:
+                return changes(conn, cursor=cursor, limit=limit)
+
+        return audited("inventory_changes", arguments, operation)
 
     return mcp
 

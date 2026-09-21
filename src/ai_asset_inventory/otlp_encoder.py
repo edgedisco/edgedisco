@@ -24,17 +24,34 @@ _REQUIRED = {
     "asset.kind", "asset.name", "asset.vendor", "asset.running",
     "edgedisco.simulated",
 }
-_OPTIONAL = {"asset.host_app", "asset.relationship"}
+_OPTIONAL = {"asset.host_app", "asset.relationship", "asset.version"}
+_RUNTIME_OPTIONAL = {"asset.host_app", "asset.relationship"}
 
 
-def _validated_event(payload_json: str) -> tuple[int, dict[str, Any]]:
+def _timestamp_nanos(value: Any, label: str) -> int:
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("timestamp requires timezone")
+        utc = timestamp.astimezone(timezone.utc)
+        nanos = calendar.timegm(utc.timetuple()) * 1_000_000_000 + utc.microsecond * 1_000
+        if nanos <= 0:
+            raise ValueError("invalid timestamp")
+        return nanos
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid {label}") from exc
+
+
+def _validated_event(payload_json: str) -> tuple[int, int, dict[str, Any]]:
     if not isinstance(payload_json, str):
         raise ValueError("OTLP encoder requires serialized sanitized outbox payload")
     try:
         event = json.loads(payload_json)
     except json.JSONDecodeError as exc:
         raise ValueError("invalid sanitized outbox payload") from exc
-    if not isinstance(event, dict) or set(event) != {"timestamp", "event.name", "resource", "attributes"}:
+    required_fields = {"timestamp", "event.name", "resource", "attributes"}
+    if (not isinstance(event, dict) or not required_fields <= set(event)
+            or set(event) - (required_fields | {"recorded_at"})):
         raise ValueError("unsupported outbox event fields")
     if event["event.name"] != EVENT_NAME or event["resource"] != {"service.name": "edgedisco"}:
         raise ValueError("unsupported outbox event identity")
@@ -56,6 +73,9 @@ def _validated_event(payload_json: str) -> tuple[int, dict[str, Any]]:
         raise ValueError("invalid asset signature")
     if type(attrs["asset.running"]) is not bool or type(attrs["edgedisco.simulated"]) is not bool:
         raise ValueError("invalid asset flags")
+    version = attrs.get("asset.version")
+    if version is not None and (not isinstance(version, str) or not version or len(version) > 128):
+        raise ValueError("invalid asset version")
     if kind == "agent_runtime":
         host = attrs.get("asset.host_app")
         relationship = attrs.get("asset.relationship")
@@ -63,24 +83,18 @@ def _validated_event(payload_json: str) -> tuple[int, dict[str, Any]]:
             raise ValueError("invalid host application")
         if relationship != ("local_process" if host == "Direct/local" else "spawned_by"):
             raise ValueError("invalid relationship")
-    elif set(attrs) & _OPTIONAL:
+    elif set(attrs) & _RUNTIME_OPTIONAL:
         raise ValueError("unexpected runtime attributes")
-    try:
-        timestamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
-        if timestamp.tzinfo is None:
-            raise ValueError("timestamp requires timezone")
-        utc = timestamp.astimezone(timezone.utc)
-        nanos = calendar.timegm(utc.timetuple()) * 1_000_000_000 + utc.microsecond * 1_000
-        if nanos <= 0:
-            raise ValueError("invalid timestamp")
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise ValueError("invalid outbox timestamp") from exc
-    return nanos, attrs
+    event_nanos = _timestamp_nanos(event["timestamp"], "outbox timestamp")
+    # Older queued records predate recorded_at. Preserve their previous wire behavior.
+    observed_nanos = _timestamp_nanos(event.get("recorded_at", event["timestamp"]),
+                                      "outbox recorded_at")
+    return event_nanos, observed_nanos, attrs
 
 
 def encode_outbox_event(payload_json: str) -> bytes:
     """Encode one validated outbox payload; reject all unknown fields and values."""
-    nanos, attrs = _validated_event(payload_json)
+    event_nanos, observed_nanos, attrs = _validated_event(payload_json)
     try:
         from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
         from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
@@ -106,8 +120,8 @@ def encode_outbox_event(payload_json: str) -> bytes:
     scope_logs.scope.name = "ai_asset_inventory.otlp_encoder"
     scope_logs.scope.version = __version__
     record = scope_logs.log_records.add()
-    record.time_unix_nano = nanos
-    record.observed_time_unix_nano = nanos
+    record.time_unix_nano = event_nanos
+    record.observed_time_unix_nano = observed_nanos
     record.severity_number = 9  # OTLP SEVERITY_NUMBER_INFO.
     record.severity_text = "INFO"
     record.event_name = EVENT_NAME

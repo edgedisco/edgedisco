@@ -21,7 +21,7 @@ class MCPServerTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 self.tools = {}
 
-            def tool(self):
+            def tool(self, **kwargs):
                 def register(fn):
                     self.tools[fn.__name__] = fn
                     return fn
@@ -55,6 +55,34 @@ class MCPServerTests(unittest.TestCase):
             self.assertEqual(entry["tool"], "list_devices")
             self.assertEqual(entry["result_count"], 2)
             self.assertNotIn("token", entry)
+            self.assertEqual(entry["outcome"], "success")
+
+    def test_failed_tool_call_is_audited_without_sensitive_error_text(self):
+        class FakeMCPServer:
+            def __init__(self, *args, **kwargs):
+                self.tools = {}
+
+            def tool(self, **kwargs):
+                def register(fn):
+                    self.tools[fn.__name__] = fn
+                    return fn
+                return register
+
+        fake_server = ModuleType("mcp.server")
+        fake_server.MCPServer = FakeMCPServer
+        fake_mcp = ModuleType("mcp")
+        fake_mcp.server = fake_server
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.dict(sys.modules, {"mcp": fake_mcp, "mcp.server": fake_server}):
+                server = create_server(root / "inventory.db")
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                server.tools["inventory_snapshot"](limit=0)
+            entry = json.loads((root / "mcp-audit.jsonl").read_text())
+            self.assertEqual(entry["outcome"], "error")
+            self.assertEqual(entry["error_type"], "ValueError")
+            self.assertIsNone(entry["result_count"])
+            self.assertNotIn("error_message", entry)
 
     def test_mcp_queries_are_bounded_and_sanitized(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -75,6 +103,26 @@ class MCPServerTests(unittest.TestCase):
             self.assertNotIn("path_hash", assets[0])
             self.assertNotIn("command_hash", assets[0])
 
+    def test_demo_label_and_device_freshness_are_exposed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Database(Path(temp) / "inventory.db")
+            device_id, _ = database.enroll({"hostname": "demo", "os": "Darwin"})
+            database.ingest(device_id, {
+                "scan_id": "demo", "observed_at": "2026-09-20T00:00:00+00:00",
+                "assets": [{
+                    "fingerprint": "demo", "kind": "agent_runtime", "name": "CrewAI",
+                    "vendor": "CrewAI", "running": False,
+                    "metadata": {"host_app": "Direct/local", "relationship": "local_process",
+                                 "demo_lab": True, "evidence_label": "SIMULATED TEST WORKLOADS"},
+                }],
+            })
+            asset = database.list_assets()[0]
+            self.assertTrue(asset["simulated"])
+            self.assertEqual(asset["evidence_label"], "SIMULATED TEST WORKLOADS")
+            status = database.inventory_device_status()["items"][0]
+            self.assertEqual(status["device_id"], device_id)
+            self.assertIsNotNone(status["inventory_received_at"])
+
 
 @unittest.skipUnless(Client, "optional MCP dependency is not installed")
 class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -89,6 +137,8 @@ class MCPProtocolTests(unittest.IsolatedAsyncioTestCase):
                 names = {tool.name for tool in tools.tools}
                 self.assertIn("get_compliance_summary", names)
                 self.assertIn("list_running_agents", names)
+                self.assertTrue(all(tool.annotations.read_only_hint for tool in tools.tools))
+                self.assertTrue(all(tool.annotations.open_world_hint is False for tool in tools.tools))
                 result = await client.call_tool("get_compliance_summary")
                 self.assertEqual(result.structured_content["devices"], 1)
 

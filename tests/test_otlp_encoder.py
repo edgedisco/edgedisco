@@ -57,8 +57,13 @@ class OtlpEncoderTests(unittest.TestCase):
         }
         self.assertEqual(self.db.ingest(self.device_id, report), 1)
         with self.db.connect() as conn:
-            row = conn.execute("SELECT id,payload_json FROM otlp_outbox ORDER BY created_at DESC,id DESC LIMIT 1").fetchone()
-        return row
+            rows = conn.execute(
+                "SELECT id,payload_json FROM otlp_outbox ORDER BY created_at DESC,id DESC"
+            ).fetchall()
+        return next(
+            row for row in rows
+            if json.loads(row["payload_json"])["attributes"]["edgedisco.simulated"] is simulated
+        )
 
     @staticmethod
     def decoded(payload):
@@ -84,7 +89,7 @@ class OtlpEncoderTests(unittest.TestCase):
         self.assertEqual(record.event_name, "edgedisco.asset.observed")
         self.assertEqual(record.severity_number, 9)
         self.assertEqual(record.time_unix_nano, 1789927200000000000)
-        self.assertEqual(record.observed_time_unix_nano, record.time_unix_nano)
+        self.assertGreater(record.observed_time_unix_nano, record.time_unix_nano)
         self.assertEqual(attrs, {
             "edgedisco.schema.version": 1,
             "edgedisco.observation.id": row["id"],

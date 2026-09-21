@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ai_asset_inventory.database import Database, utc_now
@@ -52,6 +53,19 @@ class DatabaseTests(unittest.TestCase):
             sessions = db.list_agent_sessions(status="active", app="cursor")
             self.assertEqual(len(sessions), 1)
             self.assertNotIn("session_hash", sessions[0])
+
+    def test_session_filter_uses_effective_stale_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Database(Path(temp) / "test.db")
+            device_id, _ = db.enroll({"hostname": "mac-01", "os": "Darwin"})
+            old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            db.ingest_runtime_events(device_id, [{
+                "event_id": "event-old", "observed_at": old, "app": "cursor",
+                "event_type": "sessionStart", "session_hash": "session", "agent_hash": "root",
+                "status": "active", "metadata": {},
+            }])
+            self.assertEqual(db.list_agent_sessions(status="active"), [])
+            self.assertEqual(db.list_agent_sessions(status="stale")[0]["status"], "stale")
 
 
 if __name__ == "__main__":

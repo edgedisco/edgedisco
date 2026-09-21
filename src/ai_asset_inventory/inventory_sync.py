@@ -2,17 +2,94 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from .otlp_events import project_asset
 
 
+def _digest(value: dict[str, Any]) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _project_inventory_asset(device_id: str, observed_at: str,
+                             asset: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    """Project an asset for sync; MCP configuration has a separate safe schema from OTLP."""
+    if asset.get("kind") != "mcp_server":
+        return project_asset(device_id, observed_at, asset)
+    name = asset.get("name")
+    vendor = asset.get("vendor")
+    version = asset.get("version")
+    running = asset.get("running")
+    metadata = asset.get("metadata", {})
+    if (not isinstance(device_id, str) or not device_id
+            or not isinstance(name, str) or not name or len(name) > 255
+            or not isinstance(vendor, str) or not vendor or len(vendor) > 255
+            or version is not None and (not isinstance(version, str) or not version or len(version) > 128)
+            or not isinstance(running, bool) or not isinstance(metadata, dict)):
+        return None
+    try:
+        instant = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            return None
+    except (AttributeError, ValueError):
+        return None
+    demo_marker = metadata.get("demo_lab")
+    if demo_marker is not None and not isinstance(demo_marker, bool):
+        return None
+    simulated = demo_marker is True
+    if simulated and metadata.get("evidence_label") != "SIMULATED TEST WORKLOADS":
+        return None
+    attributes: dict[str, Any] = {
+        "edgedisco.schema.version": 1,
+        "device.id": device_id,
+        "asset.kind": "mcp_server",
+        "asset.name": name,
+        "asset.vendor": vendor,
+        "asset.running": running,
+        "edgedisco.simulated": simulated,
+    }
+    if version is not None:
+        attributes["asset.version"] = version
+    configured_in = metadata.get("configured_in")
+    if configured_in in {"Claude Desktop", "Cursor", "VS Code"}:
+        attributes["asset.configured_in"] = configured_in
+    transport = metadata.get("transport")
+    if transport in {"stdio", "remote"}:
+        attributes["asset.transport"] = transport
+    executable = metadata.get("executable")
+    if (isinstance(executable, str) and executable and len(executable) <= 255
+            and "/" not in executable and "\\" not in executable):
+        attributes["asset.executable"] = executable
+    identity = {
+        "schema": 1,
+        "device.id": device_id,
+        "asset.kind": "mcp_server",
+        "asset.name": name,
+        "asset.vendor": vendor,
+        "asset.configured_in": attributes.get("asset.configured_in"),
+        "edgedisco.simulated": simulated,
+    }
+    state = {
+        key: value for key, value in attributes.items()
+        if key not in {"edgedisco.schema.version", "device.id", "asset.kind", "asset.name",
+                       "asset.vendor", "asset.configured_in", "edgedisco.simulated"}
+    }
+    event = {
+        "timestamp": instant.isoformat(),
+        "event.name": "edgedisco.asset.observed",
+        "resource": {"service.name": "edgedisco"},
+        "attributes": attributes,
+    }
+    return _digest(identity), _digest(state), event
+
+
 def bootstrap(conn: sqlite3.Connection) -> None:
-    """Seed an existing installation once from its retained current inventory."""
-    if conn.execute("SELECT 1 FROM inventory_sync_changes LIMIT 1").fetchone():
-        return
+    """Reconcile retained current inventory into the sync projection."""
     # Historical rows survive deletion. Only the latest scan's timestamp can
     # establish membership; equal-timestamp scans may leave an ambiguous union.
     # In that case wait for a fresh upload instead of resurrecting old assets.
@@ -51,7 +128,7 @@ def record_scan_changes(conn: sqlite3.Connection, device_id: str,
                         observed_at: str, assets: list[dict[str, Any]]) -> None:
     current: dict[str, tuple[str, dict[str, Any]]] = {}
     for asset in assets:
-        projected = project_asset(device_id, observed_at, asset)
+        projected = _project_inventory_asset(device_id, observed_at, asset)
         if projected is None:
             continue
         key, state_hash, event = projected

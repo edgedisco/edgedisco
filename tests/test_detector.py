@@ -16,6 +16,31 @@ HOMEBREW_FRAMEWORK_PYTHON = (
 
 
 class DetectorTests(unittest.TestCase):
+    def test_linux_vscode_mcp_candidate_uses_xdg_config_home(self):
+        with patch.object(detector.platform, "system", return_value="Linux"), \
+             patch.object(detector.Path, "home", return_value=Path("/home/tester")), \
+             patch.dict(os.environ, {"XDG_CONFIG_HOME": "/custom/config"}):
+            candidates = detector._mcp_candidates()
+        self.assertIn(("VS Code", Path("/custom/config/Code/User/mcp.json")), candidates)
+
+    def test_mcp_config_schema_matches_each_supported_host(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cases = (
+                ("VS Code", {"servers": {"memory": {"command": "/usr/bin/node"}}}),
+                ("Cursor", {"mcpServers": {"memory": {"command": "/usr/bin/node"}}}),
+                ("Claude Desktop", {"mcpServers": {"memory": {"url": "https://example.invalid"}}}),
+            )
+            for index, (owner, payload) in enumerate(cases):
+                with self.subTest(owner=owner):
+                    path = root / f"mcp-{index}.json"
+                    path.write_text(json.dumps(payload))
+                    with patch.object(detector, "_mcp_paths", return_value=[(owner, path)]):
+                        assets = detector.scan_mcp_configs()
+                    self.assertEqual(len(assets), 1)
+                    self.assertEqual(assets[0].name, "memory")
+                    self.assertEqual(assets[0].metadata["configured_in"], owner)
+
     def test_incremental_scanner_refreshes_processes_but_reuses_static_evidence(self):
         static = detector.Asset(
             fingerprint="a" * 64, kind="application", name="Claude", vendor="Anthropic",

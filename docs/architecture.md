@@ -34,6 +34,24 @@ Administrators authenticate with a separate credential. The dashboard shows flee
 
 Local macOS setup opens a fresh, single-use browser bootstrap URL to establish an administrator session; the administrator token is never placed in that URL. Opening the plain dashboard later without a valid session still requires sign-in.
 
+### MCP inventory service
+
+The optional MCP server is a separate read-only process over Streamable HTTP. It binds to loopback,
+offers bounded interactive queries, and provides a watermark snapshot plus ordered change feed for
+complete inventory synchronization. Asset state changes and per-device inventory freshness are
+separate contracts so unchanged endpoints do not create an upsert for every asset on every scan.
+MCP configuration records use a dedicated sanitized projection; tool arguments, credentials,
+environment values, headers, URLs, and raw paths are excluded. See
+[MCP inventory access and synchronization](inventory-sync-mcp.md).
+
+### OpenTelemetry projection
+
+When explicitly enabled, accepted inventory snapshots also pass through a stricter recognized-asset
+projection into a bounded SQLite outbox. The projection records state changes for applications,
+processes, and agent runtimes and the encoder produces OTLP Logs protobuf. Inventory observation
+time and server receipt time are retained separately. No exporter or collector network delivery is
+implemented yet. See [OpenTelemetry integration design](otel-integration.md).
+
 Runtime spool uploads are serialized independently of hook writers. Files are sent in bounded batches and retained until all batches succeed. Failed uploads replay the same event IDs, which the server deduplicates. Inventory snapshots and session state use observation timestamps rather than arrival order; older snapshots retain their scan headers without replacing current state.
 
 Running inventory requires a current snapshot received within 15 minutes. Runtime hook uploads alone do not refresh that inventory. The dashboard marks expired inventory as stale, and the asset CSV exposes a separate `stale` column. All three CSV exports include all records, independently of the dashboard's 500-row display cap. OTLP projection includes stopped assets after snapshot reconciliation.
@@ -51,15 +69,22 @@ sequenceDiagram
   participant API as Inventory API
   participant DB as Evidence store
   participant A as Administrator
+  participant M as MCP consumer
+  participant O as OTLP outbox
   E->>API: Enroll with shared credential
   API-->>E: Device ID and upload token
   H->>E: Sanitized lifecycle metadata
   E->>API: Sanitized inventory report
   E->>API: Batched runtime events
   API->>DB: Scan and asset state
+  opt OTLP outbox enabled
+    API->>O: Sanitized asset state change
+  end
   A->>API: Authenticated dashboard request
   API->>DB: Read fleet evidence
   API-->>A: Dashboard or CSV
+  M->>DB: Read-only snapshot, changes, freshness
+  DB-->>M: Sanitized inventory records
 ```
 
 ## Collected fields

@@ -24,6 +24,10 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Store server credentials in a secret manager.
 - Add security headers at ingress and set session cookies as Secure.
 - Forward authentication, enrollment, upload, export, and administrative audit events to a SIEM.
+- Keep MCP on loopback; for remote use, require an authenticated HTTPS proxy that rewrites the
+  upstream Host header, rate-limits requests, and records caller identity.
+- Run the MCP process and database under a dedicated operating system account when untrusted local
+  users or processes share the host.
 
 ## Endpoint distribution
 
@@ -50,4 +54,8 @@ The included implementation is suitable for an evaluation or controlled pilot. C
 - Route findings into the existing endpoint, CMDB, SIEM, or case-management workflow.
 - Establish ownership and response SLAs for newly observed assets.
 - Load-test ingest volume and dashboard queries at the expected fleet size.
+- Define MCP change-log and audit-log retention, cursor expiry, resnapshot procedures, and rotation.
+- Do not treat the OTLP outbox and encoder as collector delivery. Before enabling OTLP network
+  export, implement and test worker claiming, TLS/authentication, timeouts, partial success,
+  retry/backoff, crash recovery, delivered-row retention, and queue health monitoring.
 - Run an independent security review before production approval.

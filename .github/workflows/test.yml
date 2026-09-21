@@ -26,3 +26,15 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Compile
         run: python -m compileall -q src tests
+
+  optional-integrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MCP and OTLP extras
+        run: python -m pip install '.[mcp,otlp]'
+      - name: Test MCP protocol and OTLP protobuf paths
+        run: python -m unittest tests.test_mcp_server tests.test_otlp_encoder -v

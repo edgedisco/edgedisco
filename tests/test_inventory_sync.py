@@ -14,6 +14,15 @@ def asset(name="CrewAI", running=True, fingerprint=None):
                          "prompt": "PRIVATE_PROMPT", "api_key": "PRIVATE_KEY"}}
 
 
+def mcp_asset(name="filesystem"):
+    return {
+        "fingerprint": "mcp-" + name, "kind": "mcp_server", "name": name,
+        "vendor": "Unknown", "running": False,
+        "metadata": {"configured_in": "VS Code", "transport": "stdio",
+                     "executable": "node", "api_key": "PRIVATE_KEY"},
+    }
+
+
 class InventorySyncTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -121,6 +130,31 @@ class InventorySyncTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["items"][0]["attributes"]["asset.name"], "AutoGen")
         self.assertFalse(result["items"][0]["attributes"]["asset.running"])
+
+    def test_mcp_configuration_is_included_without_private_fields(self):
+        self.scan([mcp_asset()])
+        with self.db.connect() as conn:
+            result = snapshot(conn)
+        self.assertEqual(len(result["items"]), 1)
+        attributes = result["items"][0]["attributes"]
+        self.assertEqual(attributes["asset.kind"], "mcp_server")
+        self.assertEqual(attributes["asset.configured_in"], "VS Code")
+        self.assertEqual(attributes["asset.transport"], "stdio")
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_mcp_projection_rejects_url_and_path_shaped_metadata(self):
+        unsafe = mcp_asset()
+        unsafe["metadata"].update({
+            "configured_in": "PRIVATE_OWNER", "transport": "https://secret.invalid/token",
+            "executable": "/private/secret/server",
+        })
+        self.scan([unsafe])
+        with self.db.connect() as conn:
+            attributes = snapshot(conn)["items"][0]["attributes"]
+        self.assertNotIn("asset.configured_in", attributes)
+        self.assertNotIn("asset.transport", attributes)
+        self.assertNotIn("asset.executable", attributes)
+        self.assertNotIn("secret", json.dumps(attributes))
 
 
 if __name__ == "__main__":

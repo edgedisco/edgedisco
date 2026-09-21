@@ -311,6 +311,7 @@ class Database:
                 continue
             event_id = "sha256:" + hashlib.sha256(uuid.uuid4().bytes).hexdigest()
             event["attributes"]["edgedisco.observation.id"] = event_id
+            event["recorded_at"] = now
             payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
             payload_bytes = len(payload.encode("utf-8"))
             if payload_bytes > self.otlp_max_payload_bytes:
@@ -445,24 +446,60 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(f"""
                 SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
-                       (a.running AND {FRESH_SCAN}) AS running,(NOT {FRESH_SCAN}) AS stale,a.first_seen,a.last_seen
+                       (a.running AND {FRESH_SCAN}) AS running,(NOT {FRESH_SCAN}) AS stale,
+                       a.first_seen,a.last_seen,a.metadata_json
                 FROM assets a JOIN devices d ON d.id=a.device_id
                 {where} ORDER BY a.last_seen DESC LIMIT ?
             """, parameters)
             result = [dict(row) for row in rows]
         for row in result:
+            metadata = json.loads(row.pop("metadata_json"))
             row["running"] = bool(row["running"])
             row["stale"] = bool(row["stale"])
+            row["simulated"] = metadata.get("demo_lab") is True
+            if row["simulated"]:
+                row["evidence_label"] = "SIMULATED TEST WORKLOADS"
         return result
+
+    def inventory_device_status(self, *, after: str = "", limit: int = 100) -> dict[str, Any]:
+        """Page current inventory-report freshness by stable device ID."""
+        if not isinstance(after, str) or len(after) > 128:
+            raise ValueError("after must be a device ID")
+        limit = self._result_limit(limit)
+        with self.connect() as conn:
+            rows = conn.execute("""
+                SELECT d.id AS device_id,d.hostname,d.os,
+                       latest.observed_at AS inventory_observed_at,
+                       latest.received_at AS inventory_received_at,
+                       CASE WHEN latest.received_at IS NOT NULL
+                            AND julianday(latest.received_at)>=julianday('now','-15 minutes')
+                            THEN 1 ELSE 0 END AS fresh
+                FROM devices d
+                LEFT JOIN scans latest ON latest.rowid=(
+                    SELECT s.rowid FROM scans s
+                    WHERE s.device_id=d.id
+                      AND julianday(s.observed_at)<=julianday(s.received_at,'+5 minutes')
+                    ORDER BY s.received_at DESC,s.rowid DESC LIMIT 1
+                )
+                WHERE d.id>? ORDER BY d.id LIMIT ?
+            """, (after, limit + 1)).fetchall()
+        page = [dict(row) for row in rows[:limit]]
+        for row in page:
+            row["fresh"] = bool(row["fresh"])
+        return {
+            "items": page,
+            "next_after": page[-1]["device_id"] if len(rows) > limit else None,
+        }
 
     def list_agent_sessions(self, *, status: str | None = None,
                             app: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         active_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        effective_status = "CASE WHEN s.status='active' AND s.last_seen<? THEN 'stale' ELSE s.status END"
         clauses: list[str] = []
         parameters: list[Any] = [active_cutoff]
         if status:
-            clauses.append("s.status=?")
-            parameters.append(str(status)[:32])
+            clauses.append(f"{effective_status}=?")
+            parameters.extend((active_cutoff, str(status)[:32]))
         if app:
             clauses.append("s.app=?")
             parameters.append(str(app)[:64])
@@ -471,7 +508,7 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(f"""
                 SELECT s.device_id,d.hostname,d.os,s.app,s.agent_type,s.model,
-                       CASE WHEN s.status='active' AND s.last_seen<? THEN 'stale' ELSE s.status END AS status,
+                       {effective_status} AS status,
                        s.first_seen,s.last_seen,s.last_event,s.event_count,s.tool_count,
                        s.mcp_count,s.duration_ms
                 FROM agent_sessions s JOIN devices d ON d.id=s.device_id

@@ -19,6 +19,10 @@ All notable project changes are documented here.
 - Added a JSONL audit trail for every MCP tool call.
 - Restricted the built-in MCP listener to localhost; remote deployments must use an authenticated HTTPS reverse proxy.
 - Preserved Python 3.9 support for the endpoint collector while requiring Python 3.10+ only for the optional MCP component.
+- Added complete MCP snapshot/change synchronization for sanitized MCP configuration records and a separate paginated device-freshness feed.
+- Corrected effective stale-session filtering, VS Code's `servers` configuration schema, simulation labeling, and failed-call auditing.
+- Marked every MCP tool with read-only, non-destructive, closed-world protocol hints and added real MCP/OTLP dependency coverage in CI.
+- Added OTLP version state changes and distinct inventory-observation and server-receipt timestamps while documenting that collector network delivery is not implemented yet.
 
 ## 0.4.0
 

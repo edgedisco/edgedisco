@@ -889,6 +889,9 @@ def _mcp_candidates() -> tuple[tuple[str, Path], ...]:
     if system == "Darwin":
         candidates.append(("Claude Desktop", home / "Library/Application Support/Claude/claude_desktop_config.json"))
         candidates.append(("VS Code", home / "Library/Application Support/Code/User/mcp.json"))
+    elif system == "Linux":
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
+        candidates.append(("VS Code", config_home / "Code/User/mcp.json"))
     elif system == "Windows":
         appdata = Path(os.environ.get("APPDATA", str(home)))
         candidates.append(("Claude Desktop", appdata / "Claude/claude_desktop_config.json"))
@@ -911,7 +914,8 @@ def scan_mcp_configs() -> list[Asset]:
             data: Any = json.loads(path.read_text(errors="replace"))
         except (OSError, json.JSONDecodeError):
             continue
-        servers = data.get("mcpServers", {}) if isinstance(data, dict) else {}
+        key = "servers" if owner == "VS Code" else "mcpServers"
+        servers = data.get(key, {}) if isinstance(data, dict) else {}
         if not isinstance(servers, dict):
             continue
         for server_name, config in servers.items():

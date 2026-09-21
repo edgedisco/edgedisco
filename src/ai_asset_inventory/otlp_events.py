@@ -25,11 +25,13 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
     kind = asset.get("kind")
     name = asset.get("name")
     vendor = asset.get("vendor")
+    version = asset.get("version")
     running = asset.get("running")
     metadata = asset.get("metadata", {})
     if (not isinstance(device_id, str) or not device_id or
             not isinstance(kind, str) or kind not in {"application", "process", "agent_runtime"} or
             not isinstance(name, str) or _KNOWN_ASSETS.get(name) != vendor or
+            (version is not None and (not isinstance(version, str) or not version or len(version) > 128)) or
             not isinstance(running, bool) or not isinstance(metadata, dict)):
         return None
     try:
@@ -58,6 +60,8 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
         "asset.running": running,
         "edgedisco.simulated": simulated,
     }
+    if version is not None:
+        attributes["asset.version"] = version
     host_app = None
     relationship = None
     if kind == "agent_runtime":
@@ -76,7 +80,11 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
         "asset.name": name, "asset.vendor": vendor,
         "asset.host_app": host_app, "edgedisco.simulated": simulated,
     })
-    state_hash = _digest({"asset.running": running, "asset.relationship": relationship})
+    state_hash = _digest({
+        "asset.running": running,
+        "asset.relationship": relationship,
+        "asset.version": version,
+    })
     event = {
         "timestamp": instant.isoformat(),
         "event.name": EVENT_NAME,
