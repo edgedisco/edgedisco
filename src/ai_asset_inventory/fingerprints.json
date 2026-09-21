@@ -1,8 +1,204 @@
 {
   "schema_version": 1,
-  "updated": "2026-09-20",
+  "updated": "2026-09-21",
   "hash_algorithm": "sha256",
   "agents": [
+    {
+      "name": "Kimi Code",
+      "vendor": "Moonshot AI",
+      "executables": [
+        "kimi",
+        "kimi.exe",
+        "kimi-cli",
+        "kimi-cli.exe",
+        "kimi-agent",
+        "kimi-agent.exe"
+      ],
+      "package_markers": [
+        "@moonshot-ai/kimi-code/",
+        "kimi_cli"
+      ],
+      "display_markers": [
+        "kimi code",
+        "kimi-cli"
+      ],
+      "sources": [
+        "https://moonshotai.github.io/kimi-code/en/guides/getting-started"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Kilo Code",
+      "vendor": "Kilo",
+      "executables": [
+        "kilo",
+        "kilo.exe"
+      ],
+      "package_markers": [
+        "@kilocode/cli/"
+      ],
+      "display_markers": [
+        "kilo code"
+      ],
+      "sources": [
+        "https://github.com/Kilo-Org/kilocode"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Mistral Vibe",
+      "vendor": "Mistral AI",
+      "executables": [
+        "vibe",
+        "vibe.exe",
+        "vibe-acp",
+        "vibe-acp.exe"
+      ],
+      "package_markers": [
+        "mistral-vibe"
+      ],
+      "display_markers": [
+        "mistral vibe",
+        "mistral-vibe"
+      ],
+      "sources": [
+        "https://github.com/mistralai/mistral-vibe"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Crush",
+      "vendor": "Charm",
+      "executables": [
+        "crush",
+        "crush.exe"
+      ],
+      "package_markers": [
+        "@charmland/crush/"
+      ],
+      "display_markers": [
+        "charm crush"
+      ],
+      "sources": [
+        "https://github.com/charmbracelet/crush"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Junie CLI",
+      "vendor": "JetBrains",
+      "executables": [
+        "junie",
+        "junie.exe"
+      ],
+      "package_markers": [],
+      "display_markers": [
+        "junie"
+      ],
+      "sources": [
+        "https://junie.jetbrains.com/docs/junie-cli.html"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Auggie",
+      "vendor": "Augment Code",
+      "executables": [
+        "auggie",
+        "auggie.exe"
+      ],
+      "package_markers": [
+        "@augmentcode/auggie/"
+      ],
+      "display_markers": [
+        "auggie",
+        "augment code"
+      ],
+      "sources": [
+        "https://www.augmentcode.com/product/CLI"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Devin CLI",
+      "vendor": "Cognition",
+      "executables": [
+        "devin",
+        "devin.exe"
+      ],
+      "package_markers": [],
+      "display_markers": [
+        "devin"
+      ],
+      "sources": [
+        "https://devin.ai/cli"
+      ],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Factory Droid",
+      "vendor": "Factory",
+      "executables": [
+        "droid",
+        "droid.exe"
+      ],
+      "package_markers": [],
+      "display_markers": [],
+      "sources": [
+        "https://app.factory.ai/cli"
+      ],
+      "binary_fingerprints": [
+        {
+          "sha256": "efed63e905bcc6f7e17d9deaf6542b4a4d5cff7dcb3a7a4315a31c471050f925",
+          "version": "0.223.0",
+          "platform": "darwin",
+          "architecture": "arm64",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/darwin/arm64/droid.sha256"
+        },
+        {
+          "sha256": "2d2f2d6f4e39fad0f4f8da9c3f3bc1fd2b014c910aaa889d2641e5aa1b4e4cab",
+          "version": "0.223.0",
+          "platform": "darwin",
+          "architecture": "x64",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/darwin/x64/droid.sha256"
+        },
+        {
+          "sha256": "2f898dc234a63cf21302537b52fac1f80be02587104ebf45c29b38af2409c5cf",
+          "version": "0.223.0",
+          "platform": "darwin",
+          "architecture": "x64-baseline",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/darwin/x64-baseline/droid.sha256"
+        },
+        {
+          "sha256": "0dcc5793f74fd5b73d981cd13f666a9d3f1780d1597cedc1ab468b919d517c1d",
+          "version": "0.223.0",
+          "platform": "linux",
+          "architecture": "arm64",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/linux/arm64/droid.sha256"
+        },
+        {
+          "sha256": "bc7665c7e28d6f084589999688b8102524867a5a3e3c9e4646a5dd8dc80c74bd",
+          "version": "0.223.0",
+          "platform": "linux",
+          "architecture": "x64",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/linux/x64/droid.sha256"
+        },
+        {
+          "sha256": "ed573f18f1b775a27ee75784948b6eddbf60d365b3b382a485a48844a4426a26",
+          "version": "0.223.0",
+          "platform": "linux",
+          "architecture": "x64-baseline",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/linux/x64-baseline/droid.sha256"
+        },
+        {
+          "sha256": "bca008c06a9159668568c42b27477a780aaab76ac82834f27836fca7da0e43ea",
+          "version": "0.223.0",
+          "platform": "windows",
+          "architecture": "x64",
+          "source": "https://downloads.factory.ai/factory-cli/releases/0.223.0/windows/x64/droid.exe.sha256"
+        }
+      ]
+    },
     {
       "name": "Claude Code",
       "vendor": "Anthropic",
@@ -127,6 +323,24 @@
       "package_markers": ["sweagent"],
       "display_markers": ["swe-agent", "sweagent"],
       "sources": ["https://github.com/SWE-agent/SWE-agent/blob/main/docs/usage/hello_world.md"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "Hermes Agent",
+      "vendor": "Nous Research",
+      "executables": ["hermes", "hermes.exe"],
+      "package_markers": ["hermes-agent", "hermes_cli", "/bin/hermes"],
+      "display_markers": ["hermes agent", "hermes-agent"],
+      "sources": ["https://github.com/NousResearch/hermes-agent"],
+      "binary_fingerprints": []
+    },
+    {
+      "name": "OpenClaw",
+      "vendor": "OpenClaw",
+      "executables": ["openclaw", "openclaw.exe"],
+      "package_markers": ["node_modules/openclaw/", "/bin/openclaw"],
+      "display_markers": ["openclaw"],
+      "sources": ["https://github.com/openclaw/openclaw/blob/main/docs/install/index.md"],
       "binary_fingerprints": []
     }
   ]

@@ -15,9 +15,9 @@ SHA-256 is the initial content algorithm because it is widely interoperable, ava
 
 ## Static fingerprint library
 
-[`fingerprints.json`](../src/ai_asset_inventory/fingerprints.json) is packaged with the collector and loaded without a network request. It currently contains the reviewed product identity rules, executable names, package markers, source links, and an empty list ready for versioned binary hashes. Maintainers may add a binary entry only when its provenance is an official release artifact or checksum.
+[`fingerprints.json`](../src/ai_asset_inventory/fingerprints.json) is packaged with the collector and loaded without a network request. It contains product identity rules, executable names, package markers, source links, and versioned binary hashes where available. Factory Droid 0.223.0 hashes come from the checksums published by its official installer download service; other products currently have empty hash lists. Maintainers may add a binary entry only when its provenance is an official release artifact or checksum.
 
-Each future binary entry records:
+Each binary entry records:
 
 - SHA-256 digest
 - Exact product version and distribution
@@ -25,6 +25,8 @@ Each future binary entry records:
 - First-party provenance URL
 
 A digest is `matched` only when it appears under that product. A readable artifact without a reviewed catalog digest is `unlisted`, not `mismatch` or malicious. Before introducing a `mismatch` state, matching must also require the exact version, distribution, platform, and architecture so package-manager wrappers and legitimate rebuilds do not create false tamper alerts.
+
+Factory Droid is an identification exception: the ambiguous `droid` filename must match a published Factory hash before an asset is emitted. An unknown hash is skipped, not reported as malicious. This requirement applies to both installed entry points and running processes.
 
 Library updates must keep the schema version explicit, use lowercase 64-character SHA-256 values, retain first-party provenance, update the review date, and pass the catalog validation tests. Runtime scans never download or update the library themselves.
 

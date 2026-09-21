@@ -19,6 +19,13 @@ class FingerprintLibraryTests(unittest.TestCase):
         self.assertRegex(fingerprint_library.LIBRARY_VERSION, r"^\d{4}-\d{2}-\d{2}$")
         self.assertTrue(files("ai_asset_inventory").joinpath("fingerprints.json").is_file())
 
+    def test_hermes_agent_and_openclaw_are_catalogued(self):
+        entries = {entry.name: entry for entry in fingerprint_library.AGENT_FINGERPRINTS}
+        self.assertEqual(entries["Hermes Agent"].vendor, "Nous Research")
+        self.assertIn("hermes", entries["Hermes Agent"].executables)
+        self.assertEqual(entries["OpenClaw"].vendor, "OpenClaw")
+        self.assertIn("openclaw", entries["OpenClaw"].executables)
+
     def test_file_sha256_matches_bytes_and_changes_after_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory).resolve() / "agent"

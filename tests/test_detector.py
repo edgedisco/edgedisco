@@ -71,14 +71,17 @@ class DetectorTests(unittest.TestCase):
             "ProcessId": 10,
             "ParentProcessId": 1,
             "Name": "codex.exe",
+            "ExecutablePath": "C:\\Users\\tester\\bin\\codex.exe",
             "CommandLine": "codex.exe",
         }))
         with patch.object(detector.platform, "system", return_value="Windows"), \
              patch.object(detector.subprocess, "run", return_value=completed) as run:
             rows = detector._process_rows()
         self.assertEqual([row.pid for row in rows], [10])
+        self.assertEqual(rows[0].executable, "C:\\Users\\tester\\bin\\codex.exe")
         self.assertIn("GetOwner", run.call_args.args[0][-1])
         self.assertIn("$env:USERNAME", run.call_args.args[0][-1])
+        self.assertIn("ExecutablePath", run.call_args.args[0][-1])
 
     def test_supported_agent_cli_processes_are_agent_runtimes(self):
         rows = [
@@ -87,7 +90,8 @@ class DetectorTests(unittest.TestCase):
             enumerate(detector.AGENT_CLI_SIGNATURES, 10)
             for executable in executables[:1]
         ]
-        with patch.object(detector, "_process_rows", return_value=rows):
+        with patch.object(detector, "_process_rows", return_value=rows), \
+             patch.object(detector, "_binary_evidence", return_value=("a" * 64, "matched")):
             assets = detector.scan_processes()
         runtimes = {asset.name for asset in assets if asset.kind == "agent_runtime"}
         self.assertEqual(runtimes, {item[0] for item in detector.AGENT_CLI_SIGNATURES})
@@ -117,6 +121,120 @@ class DetectorTests(unittest.TestCase):
             10, 1, "/usr/bin/python3", ["/private/venv/bin/aider --message private"]
         )
         self.assertEqual(detector._classify_process(row), ("Aider", "Aider"))
+
+    def test_hermes_and_openclaw_process_identities_are_detected(self):
+        cases = [
+            (
+                detector.ProcessObservation(10, 1, "/home/user/.local/bin/hermes", ["hermes"]),
+                ("Hermes Agent", "Nous Research"),
+            ),
+            (
+                detector.ProcessObservation(
+                    11,
+                    1,
+                    "/usr/bin/node",
+                    ["node /opt/node_modules/openclaw/dist/index.js gateway"],
+                ),
+                ("OpenClaw", "OpenClaw"),
+            ),
+        ]
+        for row, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(detector._classify_process(row), expected)
+
+    def test_hermes_and_openclaw_mentions_in_prompt_text_are_ignored(self):
+        for prompt in ("please use hermes-agent", "please use openclaw"):
+            with self.subTest(prompt=prompt):
+                row = detector.ProcessObservation(
+                    12, 1, "/usr/bin/python3", [f"python3 /srv/app.py --prompt '{prompt}'"]
+                )
+                self.assertIsNone(detector._classify_process(row))
+
+    def test_new_agent_package_and_console_script_identities(self):
+        self.assertIsNone(detector._classify_process(detector.ProcessObservation(
+            42, 1, "/usr/bin/docker", ["docker run unrelated/crush"])))
+        cases = [
+            ("node", "/opt/node_modules/@moonshot-ai/kimi-code/bin/cli.js", "Kimi Code"),
+            ("python3", "-m kimi_cli", "Kimi Code"),
+            ("node", "/opt/node_modules/@kilocode/cli/bin/kilo.js", "Kilo Code"),
+            ("python3", "/opt/venv/bin/vibe-acp", "Mistral Vibe"),
+            ("node", "/opt/node_modules/@charmland/crush/bin/crush.js", "Crush"),
+            ("node", "/opt/node_modules/@augmentcode/auggie/bin/cli.js", "Auggie"),
+            ("python3", "/opt/bin/junie", "Junie CLI"),
+            ("python3", "/opt/bin/devin", "Devin CLI"),
+        ]
+        for runtime, entrypoint, name in cases:
+            with self.subTest(name=name, entrypoint=entrypoint):
+                row = detector.ProcessObservation(42, 1, f"/usr/bin/{runtime}",
+                    [f"{runtime} {entrypoint} --prompt secret"])
+                self.assertEqual(detector._classify_process(row)[0], name)
+                unrelated = detector.ProcessObservation(42, 1, f"/usr/bin/{runtime}",
+                    [f"{runtime} /srv/app.py --prompt '{entrypoint}'"])
+                self.assertIsNone(detector._classify_process(unrelated))
+
+    def test_package_runner_identity_is_exact_and_version_aware(self):
+        cases = [
+            ("npx @augmentcode/auggie", "Auggie"),
+            ("npx @augmentcode/auggie@latest", "Auggie"),
+            ("npx @kilocode/cli", "Kilo Code"),
+            ("npx @kilocode/cli@1.2.3", "Kilo Code"),
+            ("npx @moonshot-ai/kimi-code", "Kimi Code"),
+            ("uvx mistral-vibe==2.0", "Mistral Vibe"),
+            ("npx @unrelated/auggie", None),
+            ("npx @unrelated/crush", None),
+            ("npx @kilocode/cli-helper", None),
+            ("python3 -m kimi_cli_helper", None),
+            ("python3 /srv/hermes-agent-tests/worker.py", None),
+        ]
+        for command, expected in cases:
+            with self.subTest(command=command):
+                runtime = command.split()[0]
+                row = detector.ProcessObservation(42, 1, f"/usr/bin/{runtime}", [command])
+                classified = detector._classify_process(row)
+                self.assertEqual(classified[0] if classified else None, expected)
+
+    def test_windows_droid_uses_executable_path_for_hash_verification(self):
+        row = detector.ProcessObservation(
+            42, 1, "C:\\Users\\tester\\.local\\bin\\droid.exe", ["droid.exe"]
+        )
+        with patch.object(detector.platform, "system", return_value="Windows"), \
+             patch.object(detector, "_binary_evidence", return_value=("a" * 64, "matched")) as evidence:
+            self.assertEqual(detector._classify_process(row), ("Factory Droid", "Factory"))
+        evidence.assert_called_once_with("Factory Droid", Path(row.executable))
+
+    def test_droid_requires_published_hash_for_process_and_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            binary = root / "droid"
+            binary.write_bytes(b"unrelated program named droid")
+            row = detector.ProcessObservation(42, 1, str(binary), [str(binary)])
+            with patch.object(detector, "_executable_roots", return_value=(root,)), \
+                 patch.object(detector, "_hash_roots", return_value=(root,)):
+                self.assertIsNone(detector._classify_process(row))
+                self.assertEqual(list(detector._installed_cli_candidates()), [])
+                factory = next(e for e in detector.AGENT_FINGERPRINTS if e.name == "Factory Droid")
+                with patch.object(detector, "sha256_file", return_value=factory.binary_fingerprints[0].sha256):
+                    self.assertEqual(detector._classify_process(row), ("Factory Droid", "Factory"))
+                    assets = detector.scan_installed_clis()
+                    self.assertEqual([a.name for a in assets], ["Factory Droid"])
+                    self.assertEqual(assets[0].binary_fingerprint_status, "matched")
+        self.assertIsNone(detector._classify_process(
+            detector.ProcessObservation(42, 1, "droid", ["droid --prompt factory"])))
+
+    def test_new_installed_clis_are_discovered_without_recursing(self):
+        expected = {"kimi": "Kimi Code", "kilo": "Kilo Code", "vibe": "Mistral Vibe",
+                    "crush": "Crush", "junie": "Junie CLI", "auggie": "Auggie", "devin": "Devin CLI"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for executable in expected:
+                (root / executable).touch()
+            (root / "nested").mkdir()
+            (root / "nested" / "kimi-agent").touch()
+            with patch.object(detector, "_executable_roots", return_value=(root,)), \
+                 patch.object(detector, "_hash_roots", return_value=(root,)):
+                assets = detector.scan_installed_clis()
+            self.assertEqual({a.metadata["package"]: a.name for a in assets}, expected)
+            self.assertNotIn(str(root), json.dumps([a.to_dict() for a in assets]))
 
     def test_docker_option_value_is_not_treated_as_agent_identity(self):
         unrelated = detector.ProcessObservation(

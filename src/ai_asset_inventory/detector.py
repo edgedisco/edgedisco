@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import platform
 import plistlib
@@ -119,7 +120,7 @@ def _process_rows() -> list[ProcessObservation]:
                 "Get-CimInstance Win32_Process | ForEach-Object { "
                 "$o=Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction SilentlyContinue; "
                 "if ($o.User -eq $env:USERNAME) { $_ } } | "
-                "Select-Object ProcessId,ParentProcessId,Name,CommandLine "
+                "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine "
                 "| ConvertTo-Json -Compress"
             )
             raw = subprocess.run(
@@ -136,7 +137,8 @@ def _process_rows() -> list[ProcessObservation]:
                 if not isinstance(item, dict) or type(item.get("ProcessId")) is not int:
                     raise ProcessScanUnavailable("invalid process row")
                 cmd = str(item.get("CommandLine") or "")
-                rows.append(ProcessObservation(item.get("ProcessId"), item.get("ParentProcessId"), str(item.get("Name") or ""), [cmd]))
+                executable = str(item.get("ExecutablePath") or item.get("Name") or "")
+                rows.append(ProcessObservation(item.get("ProcessId"), item.get("ParentProcessId"), executable, [cmd]))
         else:
             raw = subprocess.run(
                 ["ps", "-U", str(os.getuid()), "-o", "pid=,ppid=,comm=,args="], capture_output=True,
@@ -205,6 +207,11 @@ def _is_generic_runtime_name(name: str) -> bool:
     return lowered in _GENERIC_RUNTIMES or bool(_VERSIONED_PYTHON.match(lowered))
 
 
+def _path_name(value: str) -> str:
+    """Return a basename for native or Windows-style process paths."""
+    return ntpath.basename(value) if "\\" in value else Path(value).name
+
+
 def _identity_token_index(parts: list[str], runtime: str) -> int | None:
     """Locate only the module, script, package, or image token of a runtime."""
     python = runtime.startswith("python")
@@ -266,7 +273,7 @@ def _args_leading_executable_name(args: list[str]) -> str | None:
     token = first.split(None, 1)[0].strip("\"'")
     if not token:
         return None
-    return Path(token).name
+    return _path_name(token)
 
 
 def _process_identity_text(row: ProcessObservation) -> str:
@@ -275,10 +282,10 @@ def _process_identity_text(row: ProcessObservation) -> str:
         parts = shlex.split(" ".join(row.args), posix=platform.system() != "Windows")
     except ValueError:
         parts = []
-    executable = Path(row.executable).name.lower()
+    executable = _path_name(row.executable).lower()
     if not parts:
         return executable
-    leading = Path(parts[0]).name.lower()
+    leading = _path_name(parts[0]).lower()
     runtime = leading if _is_generic_runtime_name(leading) else executable
     identity = [runtime]
     identity_index = _identity_token_index(parts, runtime)
@@ -287,18 +294,61 @@ def _process_identity_text(row: ProcessObservation) -> str:
     return " ".join(identity).lower().replace("\\", "/")
 
 
+def _runner_package(identity: str) -> str:
+    """Normalize an npx/uvx package spec while preserving an npm scope."""
+    value = identity.lower().replace("\\", "/")
+    if value.startswith("@"):
+        separator = value.find("@", value.find("/") + 1)
+        return value if separator < 0 else value[:separator]
+    for separator in ("@", "=="):
+        if separator in value:
+            value = value.split(separator, 1)[0]
+    return value
+
+
+def _runner_marker_matches(package: str, marker: str) -> bool:
+    marker = marker.lower().rstrip("/")
+    if marker.startswith("/") or "node_modules/" in marker:
+        return False
+    if marker.startswith("@") and "/" not in marker:
+        return package.startswith(marker + "/")
+    return package == marker
+
+
+def _identity_marker_matches(identity: str, marker: str) -> bool:
+    """Match a package/module component without accepting name prefixes."""
+    marker = marker.lower().rstrip("/")
+    return bool(re.search(
+        rf"(?<![a-z0-9_-]){re.escape(marker)}(?![a-z0-9_-])",
+        identity.lower().replace("\\", "/"),
+    ))
+
+
 def _classify_process(row: ProcessObservation) -> tuple[str, str] | None:
     """Classify strong executable/package signals without matching prompt text."""
-    executable_name = Path(row.executable).name.lower()
+    executable_name = _path_name(row.executable).lower()
     leading = (_args_leading_executable_name(row.args) or "").lower()
     effective = leading if _is_generic_runtime_name(leading) else executable_name
     for name, vendor, executables, _markers in AGENT_CLI_SIGNATURES:
         if effective in executables or executable_name in executables or leading in executables:
+            if name == "Factory Droid" and not _verified_droid(Path(row.executable)):
+                return None
             return name, vendor
     if _is_generic_runtime_name(effective):
         command = _process_identity_text(row)
-        for name, vendor, _executables, markers in AGENT_CLI_SIGNATURES:
-            if any(marker in command for marker in markers):
+        # Match interpreter-launched console scripts by exact basename too.
+        # The identity text contains only the runtime and its entry point.
+        identity = command.split(" ", 1)[1] if " " in command else ""
+        runner = effective in {"npx", "npx.exe", "uvx"}
+        package = _runner_package(identity) if runner else ""
+        for name, vendor, executables, markers in AGENT_CLI_SIGNATURES:
+            if name == "Factory Droid":
+                continue
+            console_script = not runner and effective != "docker" and _path_name(identity) in executables
+            package_match = (any(_runner_marker_matches(package, marker) for marker in markers)
+                             if runner else
+                             any(_identity_marker_matches(identity, marker) for marker in markers))
+            if console_script or package_match:
                 return name, vendor
         classified = _classify(command)
         if classified and classified[0] in {"CrewAI", "AutoGen", "LangGraph/LangChain", "MCP Server", "Dify"}:
@@ -308,7 +358,7 @@ def _classify_process(row: ProcessObservation) -> tuple[str, str] | None:
 
 
 def _process_binary_candidate(row: ProcessObservation) -> Path | None:
-    executable_name = Path(row.executable).name.lower()
+    executable_name = _path_name(row.executable).lower()
     known_executables = {
         executable for _name, _vendor, executables, _markers in AGENT_CLI_SIGNATURES
         for executable in executables
@@ -319,7 +369,7 @@ def _process_binary_candidate(row: ProcessObservation) -> Path | None:
         parts = shlex.split(" ".join(row.args), posix=platform.system() != "Windows")
     except ValueError:
         return None
-    if parts and Path(parts[0]).name.lower() in known_executables:
+    if parts and _path_name(parts[0]).lower() in known_executables:
         return Path(parts[0])
     return None
 
@@ -514,6 +564,13 @@ def _binary_evidence(name: str, path: Path | None) -> tuple[str | None, str | No
     return sha256, "matched" if known_binary(name, sha256) else "unlisted"
 
 
+def _verified_droid(path: Path) -> bool:
+    # The unrelated National Archives DROID also uses this executable name.
+    # Require a published Factory hash; never execute candidates to identify them.
+    absolute = ntpath.isabs(str(path)) if "\\" in str(path) else path.is_absolute()
+    return absolute and _binary_evidence("Factory Droid", path)[1] == "matched"
+
+
 def _mac_bundle_executable(app_path: Path) -> Path | None:
     info = allowed_path(app_path / "Contents" / "Info.plist", _application_roots())
     if info is None:
@@ -549,6 +606,8 @@ def _installed_cli_candidates() -> Iterable[tuple[str, str, Path]]:
                         continue
                     key = str(safe_path)
                     if key in seen or not safe_path.is_file():
+                        continue
+                    if name == "Factory Droid" and not _verified_droid(safe_path):
                         continue
                 except OSError:
                     continue

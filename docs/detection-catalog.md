@@ -39,6 +39,23 @@ The executable and package signals below are stored in the versioned [`fingerpri
 
 Desktop and framework signatures also cover ChatGPT, Claude, Cursor, GitHub Copilot, Windsurf, Ollama, LM Studio, Jan, AnythingLLM, Open WebUI, LocalAI, Dify, CrewAI, AutoGen, LangGraph/LangChain, and supported MCP server forms.
 
+Additional CLI coverage:
+
+| Product | Executable signals | Package evidence / source |
+| --- | --- | --- |
+| Hermes Agent | `hermes` | `hermes_cli`, `hermes-agent`; [Nous Research](https://github.com/NousResearch/hermes-agent) |
+| OpenClaw | `openclaw` | `node_modules/openclaw/`; [OpenClaw](https://github.com/openclaw/openclaw) |
+| Kimi Code | `kimi`, `kimi-cli`, `kimi-agent` | `@moonshot-ai/kimi-code`, legacy `kimi_cli`; [Kimi documentation](https://moonshotai.github.io/kimi-code/en/guides/getting-started) |
+| Kilo Code | `kilo` | `@kilocode/cli`; [Kilo repository](https://github.com/Kilo-Org/kilocode) |
+| Mistral Vibe | `vibe`, `vibe-acp` | `mistral-vibe`; [Mistral repository](https://github.com/mistralai/mistral-vibe) |
+| Crush | `crush` | `@charmland/crush`; [Charm repository](https://github.com/charmbracelet/crush) |
+| Junie CLI | `junie` | Console entry point; [JetBrains documentation](https://junie.jetbrains.com/docs/junie-cli.html) |
+| Auggie | `auggie` | `@augmentcode/auggie`; [Augment documentation](https://www.augmentcode.com/product/CLI) |
+| Devin CLI | `devin` | Console entry point; [Cognition documentation](https://devin.ai/cli) |
+| Factory Droid | `droid` plus a published binary hash | [Factory installer and checksum provenance](https://app.factory.ai/cli) |
+
+The catalog also includes `.exe` names. Factory Droid has stricter identification because unrelated software uses `droid`: both installed and running observations require a readable binary in an approved root matching a published Factory SHA-256. The initial hashes cover 0.223.0 for macOS ARM64/x64/x64-baseline, Linux ARM64/x64/x64-baseline, and Windows x64. Other versions, wrappers, bare process names without an absolute executable path, and unreadable binaries are skipped until corroborating evidence is available. No candidate executable is launched during discovery.
+
 ## Confidence and limitations
 
 - Exact executable names are useful evidence but remain heuristic: an unrelated executable can reuse the same short name, and a renamed or wrapped agent may be missed.
