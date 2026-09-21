@@ -43,6 +43,8 @@ The self-service server binds to localhost. Device uploads use individual creden
 
 EdgeDisco 0.5.0 is an evaluation and controlled-pilot MVP. The dashboard and CSV evidence exports work today. Optional OTLP asset projection, a durable outbox, and a protobuf encoder exist; **network delivery to an OpenTelemetry Collector is still in development**. The [architecture guide](docs/architecture.md) describes the current boundaries.
 
+Container and VM discovery is planned but is not part of the current collector. The [container and VM discovery roadmap](docs/container-vm-discovery-roadmap.md) separates baseline local-container evidence, presence-only VM inventory, opt-in guest probes, and native guest collectors.
+
 ## Develop
 
 Developer setup uses a source checkout; it is separate from the self-service install above.

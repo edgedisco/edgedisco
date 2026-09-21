@@ -2,6 +2,8 @@
 
 EdgeDisco combines several narrow evidence sources. It does not recursively scan a user's home directory or the whole filesystem.
 
+Container runtimes and virtual-machine guests are not scanned in the current release. The [container and VM discovery roadmap](container-vm-discovery-roadmap.md) defines a phased design for local container detection, VM presence evidence, and opt-in guest inspection while preserving the privacy boundary below.
+
 ## What is scanned
 
 | Source | Scope | What an observation means |
