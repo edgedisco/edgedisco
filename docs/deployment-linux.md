@@ -36,6 +36,8 @@ The installer creates a managed virtual environment, credentials, configuration,
 
 It runs `systemctl --user`; it never invokes `sudo`, creates a system service, or scans another user's processes. Reinstallation snapshots the managed state, preserves enrollment and custom configuration, and attempts automatic rollback on failure.
 
+Running `bash ./install.sh` from a source checkout installs that checkout directly and prints its path, which allows testing uncommitted changes. A standalone or stdin installer downloads the configured source archive. Reinstallation replaces the managed package even when the version number is unchanged, then performs and uploads a fresh complete inventory before restarting the agent. An unreadable, symlinked, or non-regular existing database stops the upgrade with ownership and permission guidance; it is never silently replaced.
+
 ## Verify
 
 Open a new shell after installation:

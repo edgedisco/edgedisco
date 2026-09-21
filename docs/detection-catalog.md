@@ -41,18 +41,18 @@ Desktop and framework signatures also cover ChatGPT, Claude, Cursor, GitHub Copi
 
 Additional CLI coverage:
 
-| Product | Executable signals | Package evidence / source |
-| --- | --- | --- |
-| Hermes Agent | `hermes` | `hermes_cli`, `hermes-agent`; [Nous Research](https://github.com/NousResearch/hermes-agent) |
-| OpenClaw | `openclaw` | `node_modules/openclaw/`; [OpenClaw](https://github.com/openclaw/openclaw) |
-| Kimi Code | `kimi`, `kimi-cli`, `kimi-agent` | `@moonshot-ai/kimi-code`, legacy `kimi_cli`; [Kimi documentation](https://moonshotai.github.io/kimi-code/en/guides/getting-started) |
-| Kilo Code | `kilo` | `@kilocode/cli`; [Kilo repository](https://github.com/Kilo-Org/kilocode) |
-| Mistral Vibe | `vibe`, `vibe-acp` | `mistral-vibe`; [Mistral repository](https://github.com/mistralai/mistral-vibe) |
-| Crush | `crush` | `@charmland/crush`; [Charm repository](https://github.com/charmbracelet/crush) |
-| Junie CLI | `junie` | Console entry point; [JetBrains documentation](https://junie.jetbrains.com/docs/junie-cli.html) |
-| Auggie | `auggie` | `@augmentcode/auggie`; [Augment documentation](https://www.augmentcode.com/product/CLI) |
-| Devin CLI | `devin` | Console entry point; [Cognition documentation](https://devin.ai/cli) |
-| Factory Droid | `droid` plus a published binary hash | [Factory installer and checksum provenance](https://app.factory.ai/cli) |
+| Product | Type | Executable signals | Package evidence / source |
+| --- | --- | --- | --- |
+| Hermes Agent | Open source | `hermes` | `hermes_cli`, `hermes-agent`; [Nous Research](https://github.com/NousResearch/hermes-agent) |
+| OpenClaw | Open source | `openclaw` | `node_modules/openclaw/`; [OpenClaw](https://github.com/openclaw/openclaw) |
+| Kimi Code | Open source / commercial service | `kimi`, `kimi-cli`, `kimi-agent` | `@moonshot-ai/kimi-code`, legacy `kimi_cli`; [Kimi documentation](https://moonshotai.github.io/kimi-code/en/guides/getting-started) |
+| Kilo Code | Open source / commercial service | `kilo` | `@kilocode/cli`; [Kilo repository](https://github.com/Kilo-Org/kilocode) |
+| Mistral Vibe | Open source / commercial service | `vibe`, `vibe-acp` | `mistral-vibe`; [Mistral repository](https://github.com/mistralai/mistral-vibe) |
+| Crush | Open source | `crush` | `@charmland/crush`; [Charm repository](https://github.com/charmbracelet/crush) |
+| Junie CLI | Commercial | `junie` | Console entry point; [JetBrains documentation](https://junie.jetbrains.com/docs/junie-cli.html) |
+| Auggie | Commercial | `auggie` | `@augmentcode/auggie`; [Augment documentation](https://www.augmentcode.com/product/CLI) |
+| Devin CLI | Commercial | `devin` | Console entry point; [Cognition documentation](https://devin.ai/cli) |
+| Factory Droid | Commercial | `droid` plus a published binary hash | [Factory installer and checksum provenance](https://app.factory.ai/cli) |
 
 The catalog also includes `.exe` names. Factory Droid has stricter identification because unrelated software uses `droid`: both installed and running observations require a readable binary in an approved root matching a published Factory SHA-256. The initial hashes cover 0.223.0 for macOS ARM64/x64/x64-baseline, Linux ARM64/x64/x64-baseline, and Windows x64. Other versions, wrappers, bare process names without an absolute executable path, and unreadable binaries are skipped until corroborating evidence is available. No candidate executable is launched during discovery.
 
@@ -62,7 +62,7 @@ The catalog also includes `.exe` names. Factory Droid has stricter identificatio
 - Generic Python, Node, `npx`, `uvx`, and Docker processes are classified only from their module, script, package, or image identity. Later arguments are not searched, preventing prompts or arbitrary command text from becoming detection signals.
 - Editor extension installation is not equivalent to an active agent session. Where an editor hides the agent behind its main process, a native adapter is needed for session-level evidence.
 - A point-in-time process scan can miss very short-lived commands. Continuous collection and native hooks improve coverage.
-- The long-running collector polls current-user processes independently from its cached static scan. Default detection latency is therefore up to 60 seconds for an uninstrumented process; native runtime hooks can report supported session activity sooner.
+- The long-running collector checks current-user processes and bounded static-root metadata every 60 seconds by default. A newly added CLI normally changes its executable directory metadata and is found on that cycle. A forced full static reconciliation runs every 15 minutes as a fallback for in-place changes that do not alter watched directory metadata. Installer setup performs an immediate full scan. Native runtime hooks can report supported session activity sooner.
 - `running=true` means the process was observed in the latest fresh inventory snapshot. It does not assert that the agent was actively generating a response at that instant.
 
 ## Privacy treatment

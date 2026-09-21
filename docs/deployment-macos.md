@@ -34,7 +34,7 @@ bash install.sh --help
 | `--all-adapters` | Install every supported app adapter instead of only detected adapters |
 | `--no-open` | Suppress browser launch; use `edgedisco dashboard` afterward for an authenticated session |
 
-The installer also accepts `EDGEDISCO_HOME` for a custom managed root, `PYTHON_BIN` for the Python 3.9+ interpreter, and `EDGEDISCO_ARCHIVE_URL` for the archive fetched by remote/stdin installation. A local `./install.sh` run from a checkout installs that checkout and does not use the archive URL. Preserve the same `EDGEDISCO_HOME` value across upgrades.
+The installer also accepts `EDGEDISCO_HOME` for a custom managed root, `PYTHON_BIN` for the Python 3.9+ interpreter, and `EDGEDISCO_ARCHIVE_URL` for the archive fetched by remote/stdin installation. `bash ./install.sh` from a checkout installs that checkout, prints its path, and does not use the archive URL; this is the supported way to test uncommitted installer changes. Piping a script through stdin provides no checkout path and downloads the configured archive. Preserve the same `EDGEDISCO_HOME` value across upgrades.
 
 The installer does not use `sudo` and does not request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring. It:
 
@@ -127,7 +127,9 @@ curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.s
 bash install.sh
 ```
 
-Reinstall validates `agent.json` before replacing the package. Invalid JSON, invalid settings, or a configuration/database version newer than this release stops the upgrade. Repair the existing file or use a compatible release; reinstall does not silently discard it.
+Reinstall validates `agent.json` and the existing database before replacing the package. Invalid JSON, invalid settings, a non-regular or symlinked database, an unreadable database, or a configuration/database version newer than this release stops the upgrade. The error identifies the affected path and directs the user to check ownership and permissions; reinstall does not silently discard or replace unreadable evidence. Repair the existing file or use a compatible release.
+
+The managed package is force-reinstalled from the selected source even when its Python package version has not changed. This ensures catalog-only and detector-only updates are deployed. Setup then performs and uploads a fresh full inventory before restarting the background agent.
 
 Unversioned and version-1 configuration is migrated to `config_version: 2`, preserving custom settings and adding missing incremental-scanning defaults. The local server URL follows the configured port. Missing or rejected device credentials are re-enrolled with the local enrollment credential; timeouts and server errors do not trigger re-enrollment. Old EdgeDisco hook commands are replaced when paths change, while unrelated hooks remain intact.
 

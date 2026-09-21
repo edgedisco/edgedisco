@@ -27,7 +27,7 @@ Linux self-service needs an active `systemd --user` session. See the [macOS](doc
 ## What it sees
 
 - Supported desktop AI apps, coding tools, local model runtimes, and agent frameworks.
-- Supported agent CLIs, including Claude Code, Codex, Gemini CLI, Aider, and others in the [detection catalog](https://github.com/edgedisco/edgedisco/blob/main/docs/detection-catalog.md).
+- Supported agent CLIs, including Claude Code, Codex, Gemini CLI, Hermes Agent, OpenClaw, Kimi Code, Kilo Code, Mistral Vibe, and others in the [detection catalog](https://github.com/edgedisco/edgedisco/blob/main/docs/detection-catalog.md).
 - Current-user processes and parent relationships, plus supported MCP server configurations.
 - Sanitized session, subagent, tool, and MCP activity from optional Cursor, Claude Code, and GitHub Copilot hooks.
 
@@ -57,5 +57,7 @@ make test
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. The core supports Python 3.9+; the optional MCP component requires Python 3.10+ and the `mcp` extra.
+
+To test the managed installation flow with uncommitted local changes, run `bash ./install.sh` from the checkout. The installer prints the checkout path, installs that source directly, replaces a same-version managed package, and performs an immediate inventory upload. An installer executed through stdin has no checkout path and downloads the configured source archive instead.
 
 EdgeDisco was created by Neeraj Sabharwal and is licensed under [AGPLv3](LICENSE). [Website](https://edgedisco.com) · [Source](https://github.com/edgedisco/edgedisco)

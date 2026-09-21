@@ -8,11 +8,15 @@ The long-running agent defaults to:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `process_poll_interval_seconds` | 60 | Take one current-user process snapshot and compare normalized inventory state |
+| `process_poll_interval_seconds` | 60 | Take one current-user process snapshot, check bounded static-root metadata, and compare normalized inventory state |
 | `scan_interval_seconds` | 300 | Upload a full heartbeat even when inventory did not change |
 | `static_scan_interval_seconds` | 900 | Force reconciliation of applications, CLI entry points, binary hashes, and MCP configuration |
 
 Static evidence is cached in memory. Between full reconciliations, EdgeDisco checks metadata only for its bounded application roots, executable roots, and supported MCP configuration paths. A size, inode, modification-time, or change-time difference invalidates the cache immediately. An in-place application or CLI update that does not modify its parent directory is caught by the periodic full reconciliation. Existing binary SHA-256 results have a second cache keyed by resolved path and file identity metadata, so unchanged executable bytes are not reread.
+
+With default settings, a newly created CLI entry point normally changes its executable root and is detected on the next 60-second collection cycle. The 15-minute static interval is the guaranteed fallback for changes that leave watched root metadata unchanged.
+
+Installer setup bypasses the long-running agent's in-memory cache: it performs a fresh complete inventory scan, uploads it before setup succeeds, and then restarts the agent. A supported installed CLI should therefore appear immediately after a successful install or upgrade; it does not need to be running.
 
 Every process poll produces a normalized state digest. The agent uploads a complete snapshot immediately when this state changes. If it does not change, runtime-hook events are still flushed and inventory waits for the heartbeat. Complete snapshots are intentional: the server uses absence from a fresh report to mark a previously running asset stopped.
 
