@@ -102,11 +102,12 @@ def bootstrap(conn: sqlite3.Connection) -> None:
         ), latest AS (
             SELECT device_id,observed_at,asset_count FROM ranked_scans WHERE rank=1
         )
-        SELECT a.device_id,a.kind,a.name,a.vendor,a.running,a.last_seen,a.metadata_json
+        SELECT a.device_id,a.kind,a.name,a.vendor,a.version,a.running,a.last_seen,a.metadata_json
         FROM assets a
-        JOIN latest ON latest.device_id=a.device_id AND latest.observed_at=a.last_seen
-        WHERE latest.asset_count=(SELECT COUNT(*) FROM assets current
-            WHERE current.device_id=a.device_id AND current.last_seen=latest.observed_at)
+        JOIN latest ON latest.device_id=a.device_id
+        WHERE a.present=1 OR (a.present IS NULL AND latest.observed_at=a.last_seen
+          AND latest.asset_count=(SELECT COUNT(*) FROM assets current
+            WHERE current.device_id=a.device_id AND current.last_seen=latest.observed_at))
         ORDER BY a.device_id,a.fingerprint DESC""").fetchall()
     by_device: dict[str, list[dict[str, Any]]] = {}
     observed: dict[str, str] = {}
@@ -117,7 +118,7 @@ def bootstrap(conn: sqlite3.Connection) -> None:
             continue
         by_device.setdefault(row["device_id"], []).append({
             "kind": row["kind"], "name": row["name"], "vendor": row["vendor"],
-            "running": bool(row["running"]), "metadata": metadata,
+            "running": bool(row["running"]), "version": row["version"], "metadata": metadata,
         })
         observed.setdefault(row["device_id"], row["last_seen"])
     for device_id, assets in by_device.items():

@@ -2,6 +2,14 @@
 
 All notable project changes are documented here.
 
+## Unreleased
+
+- Separate snapshot presence from running state across SQLite, dashboard, CSV, MCP, and schema-2 OTLP asset events.
+- Export bounded, coalesced device inventory heartbeats without resending unchanged assets.
+- Refresh the dashboard every 15 seconds and qualify freshness using observation and receipt time.
+- Reject redirects on authenticated agent uploads to prevent forwarding enrollment or device credentials.
+- Preserve legacy queued events and document collector migration and trust boundaries.
+
 ## 0.5.0
 
 - Added distinct detection for Google Antigravity, Google Antigravity IDE, and Antigravity CLI without conflating them with Gemini CLI.

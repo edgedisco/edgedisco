@@ -13,7 +13,7 @@ class DatabaseTests(unittest.TestCase):
             device_id, token = db.enroll({"hostname": "mac-01", "os": "Darwin"})
             self.assertEqual(db.device_for_token(token)["id"], device_id)
             report = {
-                "scan_id": "scan-1", "observed_at": "2026-09-19T00:00:00+00:00",
+                "scan_id": "scan-1", "observed_at": utc_now(),
                 "privacy": {"content_captured": False},
                 "assets": [{"fingerprint": "abc", "kind": "process", "name": "Claude",
                             "vendor": "Anthropic", "running": True, "metadata": {}}],

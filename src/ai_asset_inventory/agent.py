@@ -40,6 +40,12 @@ class UploadError(RuntimeError):
         super().__init__(f"server returned HTTP {status}")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Enrollment/device credentials must never follow a server redirect.
+        return None
+
+
 class AgentClient:
     def __init__(self, config_path: Path):
         self.config_path = config_path
@@ -59,8 +65,10 @@ class AgentClient:
         context = None
         if self.config.get("ca_file"):
             context = ssl.create_default_context(cafile=self.config["ca_file"])
+        opener = urllib.request.build_opener(
+            _NoRedirect(), urllib.request.HTTPSHandler(context=context))
         try:
-            with urllib.request.urlopen(request, timeout=30, context=context) as response:
+            with opener.open(request, timeout=30) as response:
                 return json.loads(response.read())
         except urllib.error.HTTPError as exc:
             status = exc.code

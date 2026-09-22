@@ -53,7 +53,7 @@ class OutboxStore:
             with self.connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 version = conn.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (2, DATABASE_VERSION):
+                if version not in (2, 3, DATABASE_VERSION):
                     raise RuntimeError("Unsupported exporter database schema; upgrade the inventory server first")
                 for table in ("otlp_outbox", "otlp_asset_state", "otlp_export_status"):
                     conn.execute(f"SELECT * FROM {table} LIMIT 0")
@@ -61,7 +61,8 @@ class OutboxStore:
                     raise RuntimeError("Invalid exporter status metadata")
                 if version == 2:
                     migrate_outbox(conn)
-                    conn.execute(f"PRAGMA user_version={DATABASE_VERSION}")
+                    # Only the inventory server may migrate asset presence (v4).
+                    conn.execute("PRAGMA user_version=3")
                 # Validate required delivery columns even when the version is current.
                 conn.execute("SELECT lease_id,lease_expires_at,last_attempt_at,failed_at,last_http_status FROM otlp_outbox LIMIT 0")
                 conn.execute("SELECT attempted_events_total,retried_events_total,delivered_events_total,failed_events_total FROM otlp_export_status LIMIT 0")

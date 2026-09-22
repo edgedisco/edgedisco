@@ -9,8 +9,9 @@ from typing import Any
 
 from .detector import HOST_APP_NAMES, SIGNATURES
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EVENT_NAME = "edgedisco.asset.observed"
+DEVICE_EVENT_NAME = "edgedisco.device.inventory"
 _KNOWN_ASSETS = {name: vendor for name, vendor, _ in SIGNATURES}
 _RELATIONSHIPS = {"spawned_by", "local_process"}
 
@@ -27,12 +28,14 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
     vendor = asset.get("vendor")
     version = asset.get("version")
     running = asset.get("running")
+    present = asset.get("present", True)
     metadata = asset.get("metadata", {})
     if (not isinstance(device_id, str) or not device_id or
             not isinstance(kind, str) or kind not in {"application", "process", "agent_runtime"} or
             not isinstance(name, str) or _KNOWN_ASSETS.get(name) != vendor or
             (version is not None and (not isinstance(version, str) or not version or len(version) > 128)) or
-            not isinstance(running, bool) or not isinstance(metadata, dict)):
+            not isinstance(running, bool) or type(present) is not bool or
+            (running and not present) or not isinstance(metadata, dict)):
         return None
     try:
         instant = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
@@ -58,6 +61,7 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
         "asset.name": name,
         "asset.vendor": vendor,
         "asset.running": running,
+        "asset.present": present,
         "edgedisco.simulated": simulated,
     }
     if version is not None:
@@ -76,12 +80,14 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
         attributes["asset.relationship"] = relationship
 
     logical_key = _digest({
-        "schema": SCHEMA_VERSION, "device.id": device_id, "asset.kind": kind,
+        # Identity remains stable across payload schema upgrades.
+        "schema": 1, "device.id": device_id, "asset.kind": kind,
         "asset.name": name, "asset.vendor": vendor,
         "asset.host_app": host_app, "edgedisco.simulated": simulated,
     })
     state_hash = _digest({
         "asset.running": running,
+        "asset.present": present,
         "asset.relationship": relationship,
         "asset.version": version,
     })
@@ -92,3 +98,19 @@ def project_asset(device_id: str, observed_at: str, asset: dict[str, Any]) -> tu
         "attributes": attributes,
     }
     return logical_key, state_hash, event
+
+
+def project_device(device_id: str, observed_at: str, asset_count: int,
+                   simulated_count: int) -> tuple[str, str, dict[str, Any]]:
+    """Counts are computed by the server, never copied from endpoint metadata."""
+    key = _digest({"event": DEVICE_EVENT_NAME, "device.id": device_id})
+    event = {
+        "timestamp": observed_at, "event.name": DEVICE_EVENT_NAME,
+        "resource": {"service.name": "edgedisco"},
+        "attributes": {
+            "edgedisco.schema.version": SCHEMA_VERSION, "device.id": device_id,
+            "inventory.asset_count": asset_count,
+            "inventory.simulated_asset_count": simulated_count,
+        },
+    }
+    return key, _digest(event), event

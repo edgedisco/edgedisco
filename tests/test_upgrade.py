@@ -205,7 +205,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 1)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM assets').fetchone()[0], 1)
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM scans').fetchone()[0], 1)
-            self.assertEqual(conn.execute('SELECT COUNT(*) FROM otlp_outbox').fetchone()[0], 1)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM otlp_outbox').fetchone()[0], 2)
             self.assertNotIn('binary_sha256', {row[1] for row in conn.execute('PRAGMA table_info(assets)')})
     @patch("ai_asset_inventory.upgrade.start_services")
     @patch("ai_asset_inventory.upgrade.stop_services")

@@ -11,17 +11,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .otlp_events import project_asset
+from .otlp_events import project_asset, project_device
 from .validation import timestamp, observation_timestamp
 
 OTLP_MAX_PENDING = 5_000
 OTLP_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 OTLP_MAX_AGE_DAYS = 7
-DATABASE_VERSION = 3
+DATABASE_VERSION = 4
 
 # Runtime uploads do not establish process-inventory freshness.
 FRESH_SCAN = """EXISTS (SELECT 1 FROM scans fresh WHERE fresh.device_id=a.device_id
     AND julianday(fresh.received_at)>=julianday('now','-15 minutes')
+    AND julianday(fresh.observed_at)>=julianday('now','-15 minutes')
     AND julianday(fresh.observed_at)<=julianday(fresh.received_at,'+5 minutes')
     AND NOT EXISTS (SELECT 1 FROM scans newer WHERE newer.device_id=a.device_id
         AND newer.observed_at>fresh.observed_at
@@ -176,6 +177,11 @@ class Database:
                         conn.execute(f"ALTER TABLE assets ADD COLUMN {column}")
             from .otlp_store import migrate_outbox
             migrate_outbox(conn)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(assets)")}
+            if "present" not in columns:
+                # Historical scan headers cannot always reconstruct membership.
+                # Leave it unknown until the next complete accepted snapshot.
+                conn.execute("ALTER TABLE assets ADD COLUMN present INTEGER CHECK(present IN (0,1))")
             # Seed retained inventory under the migration's writer reservation,
             # before any new upload can make the change log nonempty.
             from .inventory_sync import bootstrap
@@ -227,13 +233,13 @@ class Database:
             )
             if newer:
                 return len(assets)
-            conn.execute("UPDATE assets SET running=0 WHERE device_id=?", (device_id,))
+            conn.execute("UPDATE assets SET running=0,present=0 WHERE device_id=?", (device_id,))
             for item in assets:
                 conn.execute("""
                     INSERT INTO assets(device_id,fingerprint,kind,name,vendor,version,path_hash,
                       command_hash,binary_sha256,binary_fingerprint_status,
-                      fingerprint_library_version,metadata_json,running,first_seen,last_seen)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                      fingerprint_library_version,metadata_json,running,first_seen,last_seen,present)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                     ON CONFLICT(device_id,fingerprint) DO UPDATE SET
                       kind=excluded.kind,name=excluded.name,vendor=excluded.vendor,
                       version=excluded.version,path_hash=excluded.path_hash,
@@ -241,7 +247,7 @@ class Database:
                       binary_fingerprint_status=excluded.binary_fingerprint_status,
                       fingerprint_library_version=excluded.fingerprint_library_version,
                       metadata_json=excluded.metadata_json,
-                      running=excluded.running,last_seen=excluded.last_seen
+                      running=excluded.running,present=1,last_seen=excluded.last_seen
                 """, (device_id, str(item.get("fingerprint", ""))[:128],
                       str(item.get("kind", "unknown"))[:64], str(item.get("name", "unknown"))[:255],
                       str(item.get("vendor", "Unknown"))[:255], item.get("version"),
@@ -264,9 +270,11 @@ class Database:
                     for row in conn.execute("SELECT * FROM assets WHERE device_id=?", (device_id,)):
                         item = dict(row)
                         item["running"] = bool(item["running"])
+                        item["present"] = bool(item["present"])
                         item["metadata"] = json.loads(item.pop("metadata_json"))
                         reconciled.append(item)
-                    self._queue_otlp_observations(conn, device_id, observed_at, reconciled)
+                    self._queue_otlp_observations(conn, device_id, observed_at, reconciled,
+                                                  len(assets), sum(a.get("metadata", {}).get("demo_lab") is True for a in assets))
                     conn.execute("RELEASE SAVEPOINT otlp_projection")
                 except (sqlite3.Error, TypeError, ValueError):
                     # Export bookkeeping must not roll back local inventory.
@@ -289,7 +297,8 @@ class Database:
                      last_dropped_at=?,last_drop_reason=? WHERE id=1""", (now, reason))
 
     def _queue_otlp_observations(self, conn: sqlite3.Connection, device_id: str,
-                                 observed_at: str, assets: list[dict[str, Any]]) -> None:
+                                 observed_at: str, assets: list[dict[str, Any]],
+                                 asset_count: int, simulated_count: int) -> None:
         now = utc_now()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.otlp_max_age_days)).isoformat()
         expired = conn.execute("""SELECT id,asset_key FROM otlp_outbox
@@ -297,19 +306,26 @@ class Database:
         for row in expired:
             self._drop_outbox_row(conn, row, now, "age")
 
-        projections = {}
+        heartbeat = project_device(device_id, observed_at, asset_count, simulated_count)
+        # Insert the lower-value heartbeat first so a state change wins if
+        # capacity pressure forces the newest records to compete.
+        projections = {heartbeat[0]: heartbeat}
+        ranks = {}
         for asset in assets:
             projected = project_asset(device_id, observed_at, asset)
             if projected is None:
                 continue
             key, _, event = projected
             # Multiple raw fingerprints can describe one exported logical asset.
-            if key not in projections or event["attributes"]["asset.running"]:
+            rank = (event["attributes"]["asset.present"], event["attributes"]["asset.running"],
+                    asset.get("last_seen", ""), asset.get("fingerprint", ""))
+            if key not in ranks or rank > ranks[key]:
                 projections[key] = projected
+                ranks[key] = rank
         for projected in projections.values():
             asset_key, state_hash, event = projected
             prior = conn.execute("SELECT state_hash FROM otlp_asset_state WHERE asset_key=?", (asset_key,)).fetchone()
-            if prior and prior["state_hash"] == state_hash:
+            if asset_key != heartbeat[0] and prior and prior["state_hash"] == state_hash:
                 continue
             event_id = "sha256:" + hashlib.sha256(uuid.uuid4().bytes).hexdigest()
             event["attributes"]["edgedisco.observation.id"] = event_id
@@ -384,7 +400,7 @@ class Database:
             ).fetchone()[0]
             session_count = conn.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0]
             recent = [dict(row) for row in conn.execute(f"""
-                SELECT a.name,a.vendor,a.kind,(a.running AND {FRESH_SCAN}) AS running,
+                SELECT a.name,a.vendor,a.kind,a.version,a.present,(a.running AND {FRESH_SCAN}) AS running,
                        (NOT {FRESH_SCAN}) AS stale,a.first_seen,a.last_seen,
                        d.hostname,d.os,d.id AS device_id,a.metadata_json
                 FROM assets a JOIN devices d ON d.id=a.device_id
@@ -410,6 +426,7 @@ class Database:
             row["metadata"] = json.loads(row.pop("metadata_json"))
             row["running"] = bool(row["running"])
             row["stale"] = bool(row["stale"])
+            row["present"] = None if row["present"] is None else bool(row["present"])
         for row in event_items:
             row["metadata"] = json.loads(row.pop("metadata_json"))
         return {
@@ -455,7 +472,7 @@ class Database:
         parameters.append(self._result_limit(limit))
         with self.connect() as conn:
             rows = conn.execute(f"""
-                SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,
+                SELECT a.device_id,d.hostname,d.os,a.kind,a.name,a.vendor,a.version,a.present,
                        (a.running AND {FRESH_SCAN}) AS running,(NOT {FRESH_SCAN}) AS stale,
                        a.first_seen,a.last_seen,a.metadata_json
                 FROM assets a JOIN devices d ON d.id=a.device_id
@@ -466,6 +483,7 @@ class Database:
             metadata = json.loads(row.pop("metadata_json"))
             row["running"] = bool(row["running"])
             row["stale"] = bool(row["stale"])
+            row["present"] = None if row["present"] is None else bool(row["present"])
             row["simulated"] = metadata.get("demo_lab") is True
             if row["simulated"]:
                 row["evidence_label"] = "SIMULATED TEST WORKLOADS"
@@ -483,6 +501,7 @@ class Database:
                        latest.received_at AS inventory_received_at,
                        CASE WHEN latest.received_at IS NOT NULL
                             AND julianday(latest.received_at)>=julianday('now','-15 minutes')
+                            AND julianday(latest.observed_at)>=julianday('now','-15 minutes')
                             THEN 1 ELSE 0 END AS fresh
                 FROM devices d
                 LEFT JOIN scans latest ON latest.rowid=(
@@ -598,14 +617,14 @@ class Database:
             "host_app", "runtime", "relationship", "instance_count", "demo_lab",
             "evidence_label", "observed_running", "path_hash", "command_hash",
             "binary_sha256", "binary_fingerprint_status", "fingerprint_library_version",
-            "status", "running", "first_seen", "last_seen", "stale",
+            "status", "running", "present", "first_seen", "last_seen", "stale",
         ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
         with self.connect() as conn:
             for row in conn.execute(f"""SELECT a.device_id,d.hostname,d.os,d.os_version,d.machine,d.agent_version,
                 a.fingerprint,a.kind,a.name,a.vendor,a.version,a.metadata_json,a.path_hash,a.command_hash,
-                a.binary_sha256,a.binary_fingerprint_status,a.fingerprint_library_version,
+                a.binary_sha256,a.binary_fingerprint_status,a.fingerprint_library_version,a.present,
                 (a.running AND {FRESH_SCAN}) AS running,a.first_seen,a.last_seen,(NOT {FRESH_SCAN}) AS stale
                 FROM assets a JOIN devices d ON d.id=a.device_id ORDER BY a.last_seen DESC"""):
                 item = dict(row)
@@ -624,8 +643,11 @@ class Database:
                 }.get(item["kind"], "Inventory scan")
                 item["running"] = bool(item["running"])
                 item["stale"] = bool(item["stale"])
+                item["present"] = None if item["present"] is None else bool(item["present"])
                 item["status"] = (
                     "Stale" if item["stale"] else
+                    "Unknown" if item["present"] is None else
+                    "Absent" if not item["present"] else
                     "Running" if item["running"] else
                     "Fixture stopped" if item["demo_lab"] else
                     "Stopped" if item["kind"] in {"process", "agent_runtime"} else

@@ -1,6 +1,6 @@
 # OpenTelemetry integration
 
-EdgeDisco projects privacy-filtered asset state changes into a durable SQLite outbox and
+EdgeDisco projects privacy-filtered asset state changes and device inventory heartbeats into a durable SQLite outbox and
 exports them as OTLP Logs over HTTP with binary protobuf. Delivery runs in a separate process,
 so collector outages do not block inventory ingestion.
 
@@ -86,9 +86,9 @@ due claim and exits, while the normal command polls until SIGINT or SIGTERM. The
 existing database and never creates or replaces one.
 
 The projection emits `edgedisco.asset.observed` log records for recognized applications,
-processes, and agent runtimes. It exports state transitions rather than every heartbeat. The
+processes, and agent runtimes. It exports asset state transitions and a separate `edgedisco.device.inventory` heartbeat. The asset
 allowlisted attributes are schema version, observation ID, device ID, asset kind, name, vendor,
-optional version, running state, simulation marker, and validated agent host/relationship fields.
+optional version, presence, running state, simulation marker, and validated agent host/relationship fields.
 MCP configuration is intentionally excluded from OTLP because server names are user-controlled;
 the sanitized MCP synchronization feed is available through MCP instead.
 
@@ -98,6 +98,51 @@ The encoder validates the stored JSON again before creating protobuf bytes. It m
 inventory observation time to `time_unix_nano` and the server receipt time to
 `observed_time_unix_nano`. Queued records from releases before receipt time was stored remain
 encodable and use the inventory observation time for both fields.
+
+## Inventory lifecycle and freshness
+
+Each accepted current full snapshot reconciles presence independently of running state:
+
+| Evidence | `asset.present` | `asset.running` |
+| --- | --- | --- |
+| Observed and running | `true` | `true` |
+| Observed but stopped (for example an installed application) | `true` | `false` |
+| Missing from the latest snapshot | `false` | `false` |
+
+Missing process evidence does not prove an application was uninstalled. Static discovery can be
+cached between full reconciliations; presence means included in the agent's snapshot. Historical
+rows remain in SQLite. Migrated rows have unknown local presence until a new snapshot arrives.
+
+New OTLP payloads use `edgedisco.schema.version=2`. Asset presence, running, version, and
+relationship changes produce asset events; unchanged assets do not. Logical asset identifiers stay
+stable across this schema upgrade. When multiple fingerprints describe one logical asset, prefer
+present evidence, then running evidence, then the most recently observed evidence. MCP's current
+snapshot excludes explicitly absent records and reports removals through its change feed.
+
+Every accepted new current scan also queues one `edgedisco.device.inventory` event, including
+unchanged inventories and empty inventories. Duplicate scan retries and older scans do not.
+Its only attributes are schema version, observation ID, device ID, `inventory.asset_count`, and
+`inventory.simulated_asset_count`. Counts describe raw records in that snapshot, including kinds
+excluded from asset export; they are not distinct product counts. No hostname or MCP name is
+included. Enrollment alone emits no heartbeat. Both event types require the existing outbox flag.
+
+The normal agent uploads on change or at its configured heartbeat interval (300 seconds by
+default). Device heartbeats are coalesced per device in the same bounded queue as asset events,
+so an outage can discard intermediate heartbeats. This is not a guaranteed per-scan audit stream.
+
+Use the device heartbeat observation time to qualify the last asset state. Arrival or exporter
+success time is not proof of a fresh scan. Local freshness requires both scan observation and
+receipt to be within 15 minutes. When a device goes quiet, mark its state stale/unknown; do not
+infer removal or fabricate a stopped OTLP event. The dashboard polls every 15 seconds while
+visible, labels stale evidence, and reports refresh failures. An expired login clears the displayed
+evidence and stops polling until sign-in. Scan cadence, cached discovery, and delivery delay all
+contribute to end-to-end latency.
+
+Device heartbeat records carry the fixed body `edgedisco.device.inventory`, so the existing
+asset-only empty-body transform in `otel-stack` can leave them untouched. Preserve `asset.present`
+and the inventory counts as structured metadata. Custom transforms should branch by event name
+and downstream queries must distinguish heartbeats from asset observations. EdgeDisco does not
+deploy collector configuration; update consumers to accept both payload schemas and event names.
 
 ## Queue behavior
 
@@ -200,7 +245,11 @@ settings at runtime; changing endpoint or credentials requires a supervised rest
 
 ### Durable state and claiming
 
-Schema version 3 extends the outbox `status` check with `sending` and adds these nullable columns:
+Database schema version 4 adds nullable asset presence; existing rows remain unknown until the next
+current snapshot. Upgrade the server and exporter together. The exporter still accepts queued
+schema-1 asset events without inventing presence; new events use payload schema 2.
+
+Database schema version 3 extended the outbox `status` check with `sending` and adds these nullable columns:
 
 | Column | Meaning |
 | --- | --- |
@@ -330,12 +379,12 @@ OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
 OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
 ```
 
-The current stack does not terminate TLS or authenticate collector requests. EdgeDisco may use it
-directly only on the same host through a loopback address. Before a remote EdgeDisco instance
-points at it, place an authenticated TLS ingress in front of the collector and restrict direct
-access to ports 4317 and 4318.
+Treat the reference stack as local-only. It does not terminate TLS or authenticate collector
+requests. If its deployment is explicitly overridden for remote access, restrict backend ports,
+protect ingestion and query surfaces with authenticated TLS ingress, disable anonymous Grafana
+admin access, and configure a non-default Grafana password.
 
-The stack's transform and Loki metadata contract consumes the existing schema version,
+The stack's asset transform and Loki metadata contract consumes the schema version,
 observation ID, device ID, asset kind/name/vendor/running state, simulation marker, and optional
 host application and relationship. It also preserves optional `asset.version`. The distinct
 OTLP event and observed timestamps require no collector transform, but integration tests must

@@ -98,3 +98,13 @@ the original host in a forwarding header only if proxy policy needs it.
 The MCP audit records do not contain proxy identity. Correlate them with proxy access logs using
 timestamps. This feed maps EdgeDisco evidence into a consumer's asset model; it does not publish
 directly into a third-party inventory API or provide prompt and response traces.
+
+## Presence and OTLP lifecycle
+
+Current inventory membership uses explicit presence from the latest accepted snapshot. Missing
+records produce synchronization removals; retained database history is not current membership.
+Upgraded databases keep legacy membership inference only until each device reports again.
+Recognized application/process/runtime records use projection schema 2 with `asset.present`;
+MCP configuration records keep their existing schema. Logical keys remain stable. Device freshness
+requires a recent observation as well as recent receipt. OTLP device heartbeats are separate from
+MCP change-feed records. See [inventory lifecycle](otel-integration.md#inventory-lifecycle-and-freshness).

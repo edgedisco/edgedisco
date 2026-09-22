@@ -5,7 +5,10 @@
 - The endpoint is untrusted input. The server authenticates the device and validates the report shape.
 - Device credentials are unique after enrollment and stored only as SHA-256 hashes on the server.
 - Administrator and enrollment credentials are separate from device credentials.
-- Transport security is delegated to an enterprise HTTPS ingress.
+- Transport security is delegated to an enterprise HTTPS ingress. Authenticated agent uploads reject redirects; configure the final server URL.
+- Authenticated reports are evidence, not device attestation. A compromised endpoint or stolen token can fabricate allowed values for that device.
+- Presence means inclusion in the latest snapshot; a quiet device is stale, not proven stopped or removed.
+- OTLP is opt-in and uses separate strict field allowlists for asset changes and device heartbeats. See [inventory lifecycle](docs/otel-integration.md#inventory-lifecycle-and-freshness).
 
 ## Data minimization
 
@@ -22,3 +25,5 @@ Raw command lines and file paths never leave the endpoint. Sensitive command arg
 - Perform legal review for employee monitoring rules in every deployment jurisdiction.
 
 Report vulnerabilities privately to the project owner. Do not include secrets or production data in reports.
+
+See the [2026-09-21 code security review](docs/security-review-2026-09-21.md) for scope, fixes, and remaining limitations.

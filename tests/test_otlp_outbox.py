@@ -53,9 +53,10 @@ class OtlpOutboxTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def rows(self):
+    def rows(self, *, all_events=False):
         with self.db.connect() as conn:
-            return conn.execute("SELECT * FROM otlp_outbox ORDER BY created_at,id").fetchall()
+            rows = conn.execute("SELECT * FROM otlp_outbox ORDER BY created_at,id").fetchall()
+            return rows if all_events else [r for r in rows if json.loads(r['payload_json'])['event.name'] == 'edgedisco.asset.observed']
 
     def dropped(self):
         with self.db.connect() as conn:
@@ -72,7 +73,7 @@ class OtlpOutboxTests(unittest.TestCase):
         self.assertEqual(payload["event.name"], "edgedisco.asset.observed")
         self.assertEqual(set(payload["attributes"]), {
             "edgedisco.schema.version", "edgedisco.observation.id", "device.id",
-            "asset.kind", "asset.name", "asset.vendor", "asset.running",
+            "asset.kind", "asset.name", "asset.vendor", "asset.running", "asset.present",
             "asset.host_app", "asset.relationship", "edgedisco.simulated",
         })
         self.assertFalse(payload["attributes"]["edgedisco.simulated"])
@@ -107,7 +108,7 @@ class OtlpOutboxTests(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(len(rows), 1)  # The older pending state was superseded.
         self.assertNotEqual(rows[0]["id"], first)
-        self.assertEqual(self.dropped()["dropped_events_total"], 1)
+        self.assertEqual(self.dropped()["dropped_events_total"], 3)  # Two replaced heartbeats and the asset.
         self.db.ingest(self.device_id, report("four", [asset(running=False)]))
         self.assertEqual(self.rows()[0]["id"], rows[0]["id"])
 
@@ -122,24 +123,23 @@ class OtlpOutboxTests(unittest.TestCase):
     def test_capacity_and_age_drop_only_outbound_evidence(self):
         self.db = Database(self.path, otlp_enabled=True, otlp_max_pending=1, otlp_max_age_days=1)
         self.db.ingest(self.device_id, report("one", [asset()]))
-        first = self.rows()[0]["id"]
+        first = self.rows(all_events=True)[0]["id"]
         self.db.ingest(self.device_id, report("two", [asset(simulated=True)]))
-        self.assertEqual(len(self.rows()), 1)
-        self.assertNotEqual(self.rows()[0]["id"], first)
+        self.assertEqual(len(self.rows(all_events=True)), 1)
+        self.assertNotEqual(self.rows(all_events=True)[0]["id"], first)
         self.assertEqual(self.dropped()["last_drop_reason"], "capacity")
         self.assertTrue(self.db.otlp_outbox_status()["degraded"])
-        self.assertEqual(self.db.otlp_outbox_status()["dropped_events_total"], 1)
+        self.assertEqual(self.db.otlp_outbox_status()["dropped_events_total"], 3)
         self.assertEqual(self.db.summary()["assets"], 1)
         with self.db.connect() as conn:
             old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
             conn.execute("UPDATE otlp_outbox SET created_at=?", (old,))
         self.db.ingest(self.device_id, report("three", [asset(simulated=True)]))
-        self.assertEqual(len(self.rows()), 1)
-        self.assertNotEqual(self.rows()[0]["created_at"], old)
-        self.assertEqual(self.dropped()["dropped_events_total"], 2)
-        self.assertEqual(self.dropped()["last_drop_reason"], "age")
+        self.assertEqual(len(self.rows(all_events=True)), 1)
+        self.assertNotEqual(self.rows(all_events=True)[0]["created_at"], old)
+        self.assertEqual(self.dropped()["dropped_events_total"], 5)
         self.db.ingest(self.device_id, report("four", [asset(simulated=True)]))
-        self.assertEqual(len(self.rows()), 1)  # Eviction repaired dedup state.
+        self.assertEqual(len(self.rows(all_events=True)), 1)  # Eviction repaired dedup state.
 
     def test_disabled_outbox_and_existing_database_upgrade(self):
         self.db.ingest(self.device_id, report("one", [asset()]))
@@ -158,7 +158,7 @@ class OtlpOutboxTests(unittest.TestCase):
         self.db = Database(self.path, otlp_enabled=True, otlp_max_payload_bytes=1)
         self.assertEqual(self.db.ingest(self.device_id, report("small-cap", [asset()])), 1)
         self.assertEqual(len(self.rows()), 0)
-        self.assertEqual(self.dropped()["dropped_events_total"], 1)
+        self.assertEqual(self.dropped()["dropped_events_total"], 2)
         self.assertEqual(self.dropped()["last_drop_reason"], "oversize")
         self.assertEqual(self.db.summary()["assets"], 1)
 

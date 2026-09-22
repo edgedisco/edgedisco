@@ -108,7 +108,9 @@ class ReviewRegressions(unittest.TestCase):
     def test_late_scans_and_events_do_not_replace_newer_state(self):
         self.db.ingest(self.device, report("new", [asset()], "2026-09-20T02:00:00.000002+00:00"))
         self.db.ingest(self.device, report("old", [], "2026-09-20T02:00:00.000001+00:00"))
-        self.assertTrue(self.db.summary()["items"][0]["running"])
+        self.assertTrue(self.db.summary()["items"][0]["stale"])
+        with self.db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT running,present FROM assets").fetchone()[:], (1, 1))
         end = normalize_hook_event("sdk", "sessionEnd", {"session_id": "s"})
         end["observed_at"] = "2026-09-20T02:00:00+00:00"
         start = normalize_hook_event("sdk", "sessionStart", {"session_id": "s"})
@@ -162,7 +164,7 @@ class ReviewRegressions(unittest.TestCase):
             "executable", "package", "configured_in", "transport", "host_app", "runtime",
             "relationship", "instance_count", "demo_lab", "evidence_label", "observed_running",
             "path_hash", "command_hash", "binary_sha256", "binary_fingerprint_status",
-            "fingerprint_library_version", "status", "running", "first_seen", "last_seen", "stale",
+            "fingerprint_library_version", "status", "running", "present", "first_seen", "last_seen", "stale",
         ])
         asset_row = next(assets)
         self.assertEqual(asset_row["fingerprint"], evidence["fingerprint"])
@@ -228,5 +230,6 @@ class ReviewRegressions(unittest.TestCase):
             self.db.ingest(self.device, report(scan, assets))
             with self.db.connect() as conn:
                 rows = conn.execute("SELECT payload_json FROM otlp_outbox").fetchall()
+                rows = [r for r in rows if json.loads(r[0])["event.name"] == "edgedisco.asset.observed"]
             self.assertEqual(len(rows), 1)
             self.assertEqual(json.loads(rows[0][0])["attributes"]["asset.running"], expected)

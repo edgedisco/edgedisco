@@ -145,3 +145,45 @@ class IncrementalAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentRedirectTests(unittest.TestCase):
+    def test_authenticated_upload_does_not_follow_redirect(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        from ai_asset_inventory.agent import UploadError
+
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                requests.append((self.path, self.headers.get('Authorization')))
+                self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                self.send_response(302)
+                self.send_header('Location', '/redirect-target')
+                self.end_headers()
+
+            def do_GET(self):
+                requests.append((self.path, self.headers.get('Authorization')))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{}')
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                config = Path(tmp) / 'agent.json'
+                config.write_text(json.dumps({'server_url': f'http://127.0.0.1:{server.server_port}'}))
+                with self.assertRaises(UploadError) as caught:
+                    AgentClient(config)._request('/api/v1/reports', {}, 'private-token')
+                self.assertEqual(caught.exception.status, 302)
+                self.assertEqual(requests, [('/api/v1/reports', 'Bearer private-token')])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()

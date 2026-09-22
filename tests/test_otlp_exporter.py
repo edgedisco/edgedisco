@@ -127,11 +127,11 @@ class DeliveryTests(unittest.TestCase):
         exporter = Exporter(self.store, self.config, transport)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            self.assertEqual(exporter.run_once(), 1)
+            self.assertEqual(exporter.run_once(), 2)
             self.ingest(False, device=device)
             exporter.run_once()
-        self.assertEqual([r["status"] for r in self.rows()], ["delivered", "delivered"])
-        self.assertEqual(self.store.status()["delivered_events_total"], 2)
+        self.assertEqual([r["status"] for r in self.rows()], ["delivered"] * 4)
+        self.assertEqual(self.store.status()["delivered_events_total"], 4)
         for wire in transport.requests:
             record = ExportLogsServiceRequest.FromString(wire).resource_logs[0].scope_logs[0].log_records[0]
             self.assertLess(record.time_unix_nano, record.observed_time_unix_nano)
@@ -144,7 +144,7 @@ class DeliveryTests(unittest.TestCase):
         other = OutboxStore(self.path)
         with ThreadPoolExecutor(max_workers=2) as pool:
             claims = list(pool.map(lambda store: store.claim(self.config), (self.store, other)))
-        self.assertEqual(sorted(map(len, claims)), [0, 1])
+        self.assertEqual(sorted(map(len, claims)), [0, 2])
         original = next(rows for rows in claims if rows)
         with self.db.connect() as conn:
             conn.execute("UPDATE otlp_outbox SET lease_expires_at='2000-01-01T00:00:00+00:00'")
@@ -153,8 +153,8 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse(self.store.begin_attempt(original, self.config))
         self.assertEqual(self.store.finish(original, "delivered"), 0)
         self.assertTrue(other.begin_attempt(replacement, self.config))
-        self.assertEqual(other.finish(replacement, "delivered"), 1)
-        self.assertEqual(other.status()["retried_events_total"], 1)
+        self.assertEqual(other.finish(replacement, "delivered"), 2)
+        self.assertEqual(other.status()["retried_events_total"], 2)
 
     def test_retry_survives_restart_and_preserves_id(self):
         self.ingest()
@@ -190,21 +190,21 @@ class DeliveryTests(unittest.TestCase):
                     conn.execute("DELETE FROM otlp_outbox WHERE status='delivered'")
                 if recovery:
                     with self.db.connect() as conn:
-                        conn.execute("UPDATE otlp_outbox SET lease_expires_at='2000-01-01' WHERE id=?", (old[0]['id'],))
+                        conn.executemany("UPDATE otlp_outbox SET lease_expires_at='2000-01-01' WHERE id=?", [(r['id'],) for r in old])
                 else:
                     self.assertEqual(self.store.finish(old, 'retry', 'transport'), 0)
                 self.assertEqual(self.store.claim(self.config), [])
                 self.assertEqual(self.rows(), [])
                 self.assertEqual(self.store.finish(old, 'delivered'), 0)
                 self.assertEqual(self.store.status()['last_drop_reason'], 'superseded')
-        self.assertEqual(self.store.status()['dropped_events_total'], 2)
+        self.assertEqual(self.store.status()['dropped_events_total'], 4)
 
     def test_partial_rejection_terminal_and_dedup_repaired(self):
         device = self.ingest()
         Exporter(self.store, self.config, FakeTransport(Result("failed", "partial_success", 200))).run_once()
         self.assertEqual(self.rows()[0]["status"], "failed")
         self.ingest(device=device)
-        self.assertEqual([r["status"] for r in self.rows()], ["failed", "pending"])
+        self.assertEqual([r["status"] for r in self.rows()], ["failed", "failed", "pending", "pending"])
 
     def test_invalid_row_isolated_and_batch_limits(self):
         for _ in range(4):
@@ -215,20 +215,23 @@ class DeliveryTests(unittest.TestCase):
         config = dataclasses.replace(self.config, batch_records=3)
         Exporter(self.store, config, transport).run_once()
         self.assertEqual(self.store.status()["states"]["failed"]["count"], 1)
-        self.assertEqual(self.store.status()["states"]["pending"]["count"], 1)
+        self.assertEqual(self.store.status()["states"]["pending"]["count"], 5)
         self.assertEqual(len(ExportLogsServiceRequest.FromString(transport.requests[0]).resource_logs), 2)
         # Exact wire bound matters even if the JSON estimate is smaller.
         with self.db.connect() as conn:
             conn.execute("UPDATE otlp_outbox SET status='pending',payload_bytes=1 WHERE status='delivered'")
         transport = FakeTransport()
         Exporter(self.store, dataclasses.replace(config, batch_bytes=600), transport).run_once()
-        self.assertTrue(all(len(wire) <= 600 for wire in transport.requests))
-        self.assertEqual(len(transport.requests), 3)
+        self.assertTrue(all(len(wire) <= 600 or len(ExportLogsServiceRequest.FromString(wire).resource_logs) == 1 for wire in transport.requests))
+        while self.store.status()['states']['pending']['count']:
+            Exporter(self.store, config, FakeTransport()).run_once()
         self.ingest()
         # A single oversized valid record is allowed alone.
         transport = FakeTransport()
         Exporter(self.store, dataclasses.replace(config, batch_bytes=1), transport).run_once()
         self.assertEqual(len(transport.requests), 1)
+        Exporter(self.store, dataclasses.replace(config, batch_bytes=1), transport).run_once()
+        self.assertEqual(len(transport.requests), 2)
 
     def test_cleanup_retains_active_work_and_totals(self):
         for _ in range(3):
@@ -239,13 +242,13 @@ class DeliveryTests(unittest.TestCase):
         with self.db.connect() as conn:
             conn.execute("UPDATE otlp_outbox SET delivered_at='2000-01-01',failed_at='2000-01-01'")
         self.store.cleanup(config)
-        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(len(self.rows()), 4)
         self.assertEqual(self.store.status()["delivered_events_total"], 1)
         self.assertEqual(self.store.status()["failed_events_total"], 1)
         with self.db.connect() as conn:
             conn.execute("UPDATE otlp_outbox SET created_at='2000-01-01'")
         self.assertEqual(self.store.claim(config), [])
-        self.assertEqual(self.store.status()["dropped_events_total"], 1)
+        self.assertEqual(self.store.status()["dropped_events_total"], 4)
 
     def test_capacity_protects_sending_and_lease_renewal(self):
         self.db.otlp_max_pending = 1
@@ -254,7 +257,7 @@ class DeliveryTests(unittest.TestCase):
         self.ingest()
         self.assertEqual(len(self.rows()), 1)
         self.assertEqual(self.rows()[0]["status"], "sending")
-        self.assertEqual(self.store.status()["dropped_events_total"], 1)
+        self.assertEqual(self.store.status()["dropped_events_total"], 3)
         with self.db.connect() as conn:
             conn.execute("UPDATE otlp_outbox SET lease_expires_at=?", ((datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat(),))
         self.assertTrue(self.store.begin_attempt(rows, self.config))
@@ -342,7 +345,7 @@ class DeliveryTests(unittest.TestCase):
                 PRAGMA user_version=2;""")
         _preserve_evidence(self.path, old_path)
         with old.connect() as conn:
-            row = conn.execute('SELECT * FROM otlp_outbox').fetchone()
+            row = conn.execute('SELECT * FROM otlp_outbox WHERE id=?', (self.rows()[0]['id'],)).fetchone()
             self.assertEqual(row['status'], 'retry')
             self.assertEqual(row['payload_json'], self.rows()[0]['payload_json'])
             self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 2)

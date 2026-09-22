@@ -37,4 +37,4 @@ jobs:
       - name: Install MCP and OTLP extras
         run: python -m pip install '.[mcp,otlp]'
       - name: Test MCP protocol and OTLP protobuf paths
-        run: python -m unittest tests.test_mcp_server tests.test_otlp_encoder -v
+        run: python -m unittest tests.test_mcp_server tests.test_otlp_encoder tests.test_otlp_exporter tests.test_inventory_lifecycle -v

@@ -48,7 +48,10 @@ environment values, headers, URLs, and raw paths are excluded. See
 
 When explicitly enabled, accepted inventory snapshots also pass through a stricter recognized-asset
 projection into a bounded SQLite outbox. The projection records state changes for applications,
-processes, and agent runtimes and the encoder produces OTLP Logs protobuf. Inventory observation
+processes, and agent runtimes, plus one device inventory heartbeat per accepted current scan.
+Presence is distinct from running: an absent fingerprint is retained as historical evidence. The
+encoder produces OTLP Logs protobuf. See [lifecycle and freshness](otel-integration.md#inventory-lifecycle-and-freshness)
+for schema, caching, and consumer rules. Inventory observation
 time and server receipt time are retained separately.
 
 Delivery runs as a separate Python process, supervised by launchd on macOS or `systemd --user` on

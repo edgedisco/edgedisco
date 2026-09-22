@@ -14,7 +14,7 @@ from typing import Any
 
 from . import __version__
 from .detector import HOST_APP_NAMES, SIGNATURES
-from .otlp_events import EVENT_NAME, SCHEMA_VERSION
+from .otlp_events import EVENT_NAME, DEVICE_EVENT_NAME, SCHEMA_VERSION
 
 OTLP_LOGS_PATH = "/v1/logs"
 OTLP_CONTENT_TYPE = "application/x-protobuf"
@@ -35,7 +35,7 @@ def _timestamp_nanos(value: Any, label: str) -> int:
             raise ValueError("timestamp requires timezone")
         utc = timestamp.astimezone(timezone.utc)
         nanos = calendar.timegm(utc.timetuple()) * 1_000_000_000 + utc.microsecond * 1_000
-        if nanos <= 0:
+        if not 0 < nanos < 2**64:
             raise ValueError("invalid timestamp")
         return nanos
     except (AttributeError, TypeError, ValueError) as exc:
@@ -53,19 +53,39 @@ def _validated_event(payload_json: str) -> tuple[int, int, dict[str, Any]]:
     if (not isinstance(event, dict) or not required_fields <= set(event)
             or set(event) - (required_fields | {"recorded_at"})):
         raise ValueError("unsupported outbox event fields")
-    if event["event.name"] != EVENT_NAME or event["resource"] != {"service.name": "edgedisco"}:
+    if event["event.name"] not in (EVENT_NAME, DEVICE_EVENT_NAME) or event["resource"] != {"service.name": "edgedisco"}:
         raise ValueError("unsupported outbox event identity")
     attrs = event["attributes"]
-    if not isinstance(attrs, dict) or not _REQUIRED <= set(attrs) or set(attrs) - (_REQUIRED | _OPTIONAL):
+    if not isinstance(attrs, dict):
         raise ValueError("unsupported outbox attributes")
-    if type(attrs["edgedisco.schema.version"]) is not int or attrs["edgedisco.schema.version"] != SCHEMA_VERSION:
+    schema = attrs.get("edgedisco.schema.version")
+    if type(schema) is not int or schema not in (1, SCHEMA_VERSION):
         raise ValueError("unsupported outbox schema version")
+    required, optional = _REQUIRED, _OPTIONAL
+    if event["event.name"] == DEVICE_EVENT_NAME:
+        required = {"edgedisco.schema.version", "edgedisco.observation.id", "device.id",
+                    "inventory.asset_count", "inventory.simulated_asset_count"}
+        optional = set()
+        if schema != SCHEMA_VERSION or "recorded_at" not in event:
+            raise ValueError("unsupported heartbeat schema")
+    elif schema == SCHEMA_VERSION:
+        required = _REQUIRED | {"asset.present"}
+    if not required <= set(attrs) or set(attrs) - (required | optional):
+        raise ValueError("unsupported outbox attributes")
     event_id = attrs["edgedisco.observation.id"]
     device_id = attrs["device.id"]
     if not isinstance(event_id, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", event_id):
         raise ValueError("invalid observation ID")
     if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{32}", device_id):
         raise ValueError("invalid device ID")
+    event_nanos = _timestamp_nanos(event["timestamp"], "outbox timestamp")
+    observed_nanos = _timestamp_nanos(event.get("recorded_at", event["timestamp"]),
+                                      "outbox recorded_at")
+    if event["event.name"] == DEVICE_EVENT_NAME:
+        count, simulated = attrs["inventory.asset_count"], attrs["inventory.simulated_asset_count"]
+        if type(count) is not int or type(simulated) is not int or not 0 <= simulated <= count <= 10_000:
+            raise ValueError("invalid inventory counts")
+        return event_nanos, observed_nanos, attrs
     kind, name, vendor = attrs["asset.kind"], attrs["asset.name"], attrs["asset.vendor"]
     if not isinstance(kind, str) or kind not in {"application", "process", "agent_runtime"}:
         raise ValueError("invalid asset kind")
@@ -73,6 +93,9 @@ def _validated_event(payload_json: str) -> tuple[int, int, dict[str, Any]]:
         raise ValueError("invalid asset signature")
     if type(attrs["asset.running"]) is not bool or type(attrs["edgedisco.simulated"]) is not bool:
         raise ValueError("invalid asset flags")
+    if schema == SCHEMA_VERSION and (type(attrs["asset.present"]) is not bool or
+                                     (attrs["asset.running"] and not attrs["asset.present"])):
+        raise ValueError("invalid asset presence")
     version = attrs.get("asset.version")
     if version is not None and (not isinstance(version, str) or not version or len(version) > 128):
         raise ValueError("invalid asset version")
@@ -85,10 +108,6 @@ def _validated_event(payload_json: str) -> tuple[int, int, dict[str, Any]]:
             raise ValueError("invalid relationship")
     elif set(attrs) & _RUNTIME_OPTIONAL:
         raise ValueError("unexpected runtime attributes")
-    event_nanos = _timestamp_nanos(event["timestamp"], "outbox timestamp")
-    # Older queued records predate recorded_at. Preserve their previous wire behavior.
-    observed_nanos = _timestamp_nanos(event.get("recorded_at", event["timestamp"]),
-                                      "outbox recorded_at")
     return event_nanos, observed_nanos, attrs
 
 
@@ -124,7 +143,10 @@ def encode_outbox_event(payload_json: str) -> bytes:
     record.observed_time_unix_nano = observed_nanos
     record.severity_number = 9  # OTLP SEVERITY_NUMBER_INFO.
     record.severity_text = "INFO"
-    record.event_name = EVENT_NAME
+    record.event_name = DEVICE_EVENT_NAME if "inventory.asset_count" in attrs else EVENT_NAME
+    if record.event_name == DEVICE_EVENT_NAME:
+        # Asset-only collector transforms leave heartbeat records untouched.
+        record.body.string_value = DEVICE_EVENT_NAME
     for key in sorted(attrs):
         record.attributes.append(key_value(key, attrs[key]))
     return request.SerializeToString()

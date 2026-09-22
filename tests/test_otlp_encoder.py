@@ -62,7 +62,7 @@ class OtlpEncoderTests(unittest.TestCase):
             ).fetchall()
         return next(
             row for row in rows
-            if json.loads(row["payload_json"])["attributes"]["edgedisco.simulated"] is simulated
+            if json.loads(row["payload_json"])["attributes"].get("edgedisco.simulated") is simulated
         )
 
     @staticmethod
@@ -91,11 +91,11 @@ class OtlpEncoderTests(unittest.TestCase):
         self.assertEqual(record.time_unix_nano, 1789927200000000000)
         self.assertGreater(record.observed_time_unix_nano, record.time_unix_nano)
         self.assertEqual(attrs, {
-            "edgedisco.schema.version": 1,
+            "edgedisco.schema.version": 2,
             "edgedisco.observation.id": row["id"],
             "device.id": self.device_id,
             "asset.kind": "agent_runtime", "asset.name": "CrewAI",
-            "asset.vendor": "CrewAI", "asset.running": True,
+            "asset.vendor": "CrewAI", "asset.running": True, "asset.present": True,
             "asset.host_app": "Cursor", "asset.relationship": "spawned_by",
             "edgedisco.simulated": False,
         })
