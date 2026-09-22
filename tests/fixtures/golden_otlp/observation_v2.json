@@ -1,0 +1,21 @@
+{
+  "attributes": {
+    "asset.host_app": "Direct/local",
+    "asset.kind": "agent_runtime",
+    "asset.name": "Claude Code",
+    "asset.present": true,
+    "asset.relationship": "local_process",
+    "asset.running": true,
+    "asset.vendor": "Anthropic",
+    "device.id": "0123456789abcdef0123456789abcdef",
+    "edgedisco.observation.id": "sha256:6d335808997fe73092e8048ce96e6203bf00eecd06b8b86eacd425cb6b1d2ca9",
+    "edgedisco.schema.version": 2,
+    "edgedisco.simulated": false
+  },
+  "event.name": "edgedisco.asset.observed",
+  "recorded_at": "2026-09-21T12:00:01+00:00",
+  "resource": {
+    "service.name": "edgedisco"
+  },
+  "timestamp": "2026-09-21T12:00:00+00:00"
+}

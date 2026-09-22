@@ -1,0 +1,15 @@
+{
+  "attributes": {
+    "device.id": "0123456789abcdef0123456789abcdef",
+    "edgedisco.observation.id": "sha256:6a162617b532382f3cdcc85920f2bb46bd31b64b787de39750291872563905a0",
+    "edgedisco.schema.version": 2,
+    "inventory.asset_count": 5,
+    "inventory.simulated_asset_count": 1
+  },
+  "event.name": "edgedisco.device.inventory",
+  "recorded_at": "2026-09-21T12:00:01+00:00",
+  "resource": {
+    "service.name": "edgedisco"
+  },
+  "timestamp": "2026-09-21T12:00:00+00:00"
+}

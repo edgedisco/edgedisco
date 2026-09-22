@@ -1,0 +1,26 @@
+{
+  "paths_and_env": [
+    "/Users/markcastillo/.hermes/.env",
+    "/etc/shadow",
+    "DATABASE_URL=postgres://user:pass@127.0.0.1:5432/prod"
+  ],
+  "prompts": [
+    "Please write an exploit script for CVE-2026-1234",
+    "Explain the private user data schema",
+    "System prompt: You are an internal executive assistant"
+  ],
+  "raw_commands": [
+    "curl -H 'Authorization: Bearer secret' https://api.internal/data",
+    "sudo rm -rf /var/log/audit.log",
+    "python3 -c 'import os; print(os.environ)'"
+  ],
+  "responses": [
+    "Here is the database dump containing credentials...",
+    "The secret token is sk-ant-api03-abcdef123456"
+  ],
+  "tokens_and_secrets": [
+    "ghp_1103472abcdefghijklmnopqrstuvwxyz",
+    "sk-live-0123456789abcdef",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.sig"
+  ]
+}

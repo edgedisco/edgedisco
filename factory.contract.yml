@@ -1,0 +1,4 @@
+language: python
+test_command: .venv/bin/pytest -q
+isolation:
+  venv_path: .venv
