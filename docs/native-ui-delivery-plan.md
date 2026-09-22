@@ -8,7 +8,7 @@ the Python inventory coverage that makes installed but idle tools visible.
 
 Current evidence: Rust collects processes, containers, installed CLIs, bounded
 macOS app bundles, and VS Code-compatible extensions. Python additionally
-inventories JetBrains plugins and MCP configuration. User and system daemons
+inventories JetBrains plugins. Native discovery now also inventories MCP configuration. User and system daemons
 expose separate inventory scopes. User settings support live updates; system
 settings still require administrator-managed configuration and restart.
 
@@ -113,7 +113,11 @@ settings still require administrator-managed configuration and restart.
   `.obsolete`; symlinked folders/manifests, nested extensions, and oversized
   metadata are skipped. Per-root manifest reads stop after a 16 MiB budget.
   No extension code is executed or raw paths exported.
-- Remaining: executable fingerprint evidence, JetBrains plugin and MCP collectors,
+- Added bounded, no-follow MCP declaration discovery for Claude Desktop, Cursor,
+  and VS Code configuration. Only server names, host app, transport type, and
+  executable basename are exposed; URLs, arguments, environment, and raw paths
+  are not exported.
+- Remaining: executable fingerprint evidence and JetBrains plugin collector,
   interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.

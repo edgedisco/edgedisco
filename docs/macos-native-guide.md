@@ -76,7 +76,9 @@ for app versions, preferring `CFBundleShortVersionString` and falling back to
 My Session scans also recognize catalog-matched extensions installed directly
 under the user's VS Code, VS Code Insiders, Cursor, Windsurf, and VSCodium
 extension folders. They read bounded `package.json` metadata, ignore obsolete
-versions, and do not run extension code. JetBrains plugins are not yet included.
+versions, and do not run extension code. MCP declarations in Claude Desktop,
+Cursor, and VS Code configuration are also inventoried without exporting URLs,
+arguments, environment variables, or raw paths. JetBrains plugins are not yet included.
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 
