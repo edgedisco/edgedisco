@@ -13,7 +13,7 @@ check-rust: test-rust
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-build-rust: check-rust
+build-rust:
 	cargo build --workspace --release
 
 # Legacy Python validation is explicit and remains available for compatibility
