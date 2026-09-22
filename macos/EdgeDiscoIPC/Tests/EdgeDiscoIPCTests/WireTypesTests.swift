@@ -2,7 +2,7 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class WireTypesTests: XCTestCase {
-    func testSettingsUpdateEncodesRevisionAndAllEditableFields() throws {
+    func testSettingsUpdateEncodesRevisionAndAllEditableFields() async throws {
         let settings = DaemonSettings(intervalSeconds: 90, otlpEndpoint: "https://example.test/v1/logs", otlpBatchSize: 42, exportEnabled: true)
         let request = IpcRequest(protocolVersion: 1, requestID: "set-1", method: "settings_set", payload: SettingsUpdateRequest(expectedRevision: "rev-1", settings: settings))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
@@ -16,7 +16,7 @@ final class WireTypesTests: XCTestCase {
         XCTAssertEqual(fields["otlp_endpoint"] as? String, "https://example.test/v1/logs")
     }
 
-    func testRequestEncodesDocumentedSnakeCaseEnvelope() throws {
+    func testRequestEncodesDocumentedSnakeCaseEnvelope() async throws {
         let request = IpcRequest(protocolVersion: 1, requestID: "request-1", method: "status")
 
         let object = try XCTUnwrap(
@@ -29,7 +29,7 @@ final class WireTypesTests: XCTestCase {
         XCTAssertEqual(object.count, 3)
     }
 
-    func testStatusResultDecodesDocumentedFields() throws {
+    func testStatusResultDecodesDocumentedFields() async throws {
         let json = Data(#"{"healthy":true,"started_at":"2026-09-22T00:00:00Z","last_scan_at":"2026-09-22T00:01:00Z","last_scan_asset_count":3,"device_count":1,"detection_count":3}"#.utf8)
 
         let status = try JSONDecoder().decode(StatusResult.self, from: json)
@@ -42,7 +42,7 @@ final class WireTypesTests: XCTestCase {
         XCTAssertEqual(status.detectionCount, 3)
     }
 
-    func testResponseDecodesProtocolError() throws {
+    func testResponseDecodesProtocolError() async throws {
         let json = Data(#"{"protocol_version":1,"request_id":"request-1","ok":false,"error":{"code":"unknown_method","message":"not exposed"}}"#.utf8)
 
         let response = try JSONDecoder().decode(IpcResponse<StatusResult>.self, from: json)

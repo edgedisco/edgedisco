@@ -49,6 +49,7 @@ final class StatusItemManager: NSObject {
     }
 
     func start() {
+        pollTimer?.invalidate()
         refreshStatus()
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) {
             [weak self] _ in

@@ -15,7 +15,7 @@ final class SocketPathResolverTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    func testResolverPrefersReadableSystemSocketPath() throws {
+    func testResolverPrefersReadableSystemSocketPath() async throws {
         let system = directory.appendingPathComponent("system.sock")
         let user = directory.appendingPathComponent("user.sock")
         XCTAssertTrue(FileManager.default.createFile(atPath: system.path, contents: Data()))
@@ -25,7 +25,7 @@ final class SocketPathResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve(), system.path)
     }
 
-    func testResolverFallsBackToReadableUserSocketPath() throws {
+    func testResolverFallsBackToReadableUserSocketPath() async throws {
         let system = directory.appendingPathComponent("missing-system.sock")
         let user = directory.appendingPathComponent("user.sock")
         XCTAssertTrue(FileManager.default.createFile(atPath: user.path, contents: Data()))
@@ -34,13 +34,13 @@ final class SocketPathResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve(), user.path)
     }
 
-    func testClientReportsDaemonNotRunningWhenNeitherPathExists() {
+    func testClientReportsDaemonNotRunningWhenNeitherPathExists() async {
         let resolver = SocketPathResolver(
             systemPath: directory.appendingPathComponent("missing-system.sock").path,
             userPath: directory.appendingPathComponent("missing-user.sock").path
         )
 
-        let state = EdgeDiscoClient(resolver: resolver).status()
+        let state = await EdgeDiscoClient(resolver: resolver).status()
 
         XCTAssertEqual(state, .daemonNotRunning)
     }

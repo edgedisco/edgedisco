@@ -3,7 +3,7 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class ClientHappyPathTests: XCTestCase {
-    func testStatusUsesOneNewlineTerminatedConnectionAndDecodesResult() throws {
+    func testStatusUsesOneNewlineTerminatedConnectionAndDecodesResult() async throws {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
@@ -12,7 +12,7 @@ final class ClientHappyPathTests: XCTestCase {
         }
         let client = EdgeDiscoClient(socketPath: server.path)
 
-        let state = client.status()
+        let state = await client.status()
 
         guard case let .connected(status) = state else {
             return XCTFail("expected connected status, got \(state)")
@@ -33,7 +33,7 @@ final class ClientHappyPathTests: XCTestCase {
         XCTAssertFalse(request.requestID.isEmpty)
     }
 
-    func testNegotiateDecodesSupportedVersion() throws {
+    func testNegotiateDecodesSupportedVersion() async throws {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
@@ -42,7 +42,7 @@ final class ClientHappyPathTests: XCTestCase {
         }
         let client = EdgeDiscoClient(socketPath: server.path)
 
-        let state = client.negotiate()
+        let state = await client.negotiate()
 
         XCTAssertEqual(
             state,
@@ -51,7 +51,7 @@ final class ClientHappyPathTests: XCTestCase {
         XCTAssertTrue(server.wait())
     }
 
-    func testScanUsesScanMethodAndDecodesResult() throws {
+    func testScanUsesScanMethodAndDecodesResult() async throws {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
@@ -60,7 +60,7 @@ final class ClientHappyPathTests: XCTestCase {
         }
         let client = EdgeDiscoClient(socketPath: server.path)
 
-        let result = client.scan()
+        let result = await client.scan()
 
         XCTAssertEqual(result, .success(ScanResult(accepted: true, assetCount: 12)))
         XCTAssertEqual(EdgeDiscoClient.explicitScanTimeout, 120)
@@ -69,7 +69,7 @@ final class ClientHappyPathTests: XCTestCase {
         XCTAssertEqual(request.method, "scan")
     }
 
-    func testDetectionsIgnoresUnexpectedKeysAndDecodesSanitizedFields() throws {
+    func testDetectionsIgnoresUnexpectedKeysAndDecodesSanitizedFields() async throws {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
@@ -78,7 +78,7 @@ final class ClientHappyPathTests: XCTestCase {
         }
         let client = EdgeDiscoClient(socketPath: server.path)
 
-        let result = client.detections()
+        let result = await client.detections()
 
         XCTAssertEqual(
             result,

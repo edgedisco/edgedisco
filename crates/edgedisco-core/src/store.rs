@@ -1,11 +1,11 @@
 use crate::models::{Asset, Device, OutboxRecord, ScanReport, Session};
 use crate::redaction::{sha256_digest, validate_report};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Mutex;
 use thiserror::Error;
 
 pub const DATABASE_VERSION: u32 = 4;
@@ -473,7 +473,7 @@ impl Store {
 
     /// Initialize SQLite schema with WAL mode and foreign key constraints.
     pub fn initialize(&self) -> Result<(), StoreError> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
@@ -705,7 +705,7 @@ impl Store {
 
     /// Return list of all table names currently existing in the database.
     pub fn table_names(&self) -> Result<Vec<String>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') ORDER BY name",
         )?;
@@ -719,7 +719,7 @@ impl Store {
 
     /// Enroll or upsert device record.
     pub fn enroll_device(&self, device: &Device) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"
             INSERT INTO devices (id, hostname, os, os_version, machine, agent_version, token_hash, enrolled_at, last_seen)
@@ -755,7 +755,7 @@ impl Store {
         queue_outbox: bool,
     ) -> Result<usize, StoreError> {
         validate_report(report).map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
 
         let existing: Option<(String, i64)> = tx
@@ -884,7 +884,7 @@ impl Store {
 
     /// Retrieve device by ID.
     pub fn get_device(&self, id: &str) -> Result<Option<Device>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, hostname, os, os_version, machine, agent_version, token_hash, enrolled_at, last_seen FROM devices WHERE id = ?1",
         )?;
@@ -908,7 +908,7 @@ impl Store {
 
     /// List enrolled devices.
     pub fn list_devices(&self, limit: usize) -> Result<Vec<Device>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, hostname, os, os_version, machine, agent_version, token_hash, enrolled_at, last_seen FROM devices ORDER BY last_seen DESC LIMIT ?1",
         )?;
@@ -939,7 +939,7 @@ impl Store {
         asset: &Asset,
         observed_at: &str,
     ) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let metadata_json = serde_json::to_string(&asset.metadata)?;
         let running_int = if asset.running { 1 } else { 0 };
         let present_int = asset.present.map(|p| if p { 1 } else { 0 }).unwrap_or(1);
@@ -994,7 +994,7 @@ impl Store {
         device_id: &str,
         fingerprint: &str,
     ) -> Result<Option<Asset>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             r#"
             SELECT fingerprint, kind, name, vendor, running, present, version,
@@ -1040,7 +1040,7 @@ impl Store {
         running_only: bool,
         limit: usize,
     ) -> Result<Vec<Asset>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut sql = String::from(
             r#"
             SELECT fingerprint, kind, name, vendor, running, present, version,
@@ -1104,7 +1104,7 @@ impl Store {
 
     /// Upsert agent session record.
     pub fn upsert_session(&self, session: &Session) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"
             INSERT INTO agent_sessions (
@@ -1155,7 +1155,7 @@ impl Store {
         session_hash: &str,
         agent_hash: &str,
     ) -> Result<Option<Session>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             r#"
             SELECT device_id, session_hash, agent_hash, app, agent_type, model, status,
@@ -1197,7 +1197,7 @@ impl Store {
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Session>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut sql = String::from(
             r#"
             SELECT device_id, session_hash, agent_hash, app, agent_type, model, status,
@@ -1254,7 +1254,7 @@ impl Store {
 
     /// Insert record into OTLP outbox.
     pub fn insert_outbox(&self, record: &OutboxRecord) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             r#"
             INSERT INTO otlp_outbox (
@@ -1302,7 +1302,7 @@ impl Store {
 
     /// Retrieve outbox record by ID.
     pub fn get_outbox(&self, id: &str) -> Result<Option<OutboxRecord>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             r#"
             SELECT id, asset_key, payload_json, payload_bytes, status, attempt_count,
@@ -1341,7 +1341,7 @@ impl Store {
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<OutboxRecord>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut sql = String::from(
             r#"
             SELECT id, asset_key, payload_json, payload_bytes, status, attempt_count,
@@ -1400,7 +1400,7 @@ impl Store {
         lease_expires_at: &str,
         now: &str,
     ) -> Result<Vec<OutboxRecord>, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("BEGIN IMMEDIATE", [])?;
 
         let expired = conn.execute(
@@ -1518,7 +1518,7 @@ impl Store {
         if ids.is_empty() {
             return Ok(false);
         }
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for &id in ids {
             let owned: i64 = tx.query_row(
@@ -1554,7 +1554,7 @@ impl Store {
         now: &str,
         next_attempt_at: &str,
     ) -> Result<usize, StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("BEGIN IMMEDIATE", [])?;
         let mut updated_count = 0;
         for &id in ids {
@@ -1593,7 +1593,7 @@ impl Store {
         if !matches!(status, "delivered" | "failed" | "retry") {
             return Err(StoreError::InvalidArgument("invalid outbox status".into()));
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("BEGIN IMMEDIATE", [])?;
 
         let mut updated_count = 0;
@@ -1838,7 +1838,7 @@ mod tests {
             pending: 2,
             bytes: 1024,
         };
-        let conn = store.conn.lock().unwrap();
+        let conn = store.conn.lock();
         for (asset, timestamp) in [
             ("asset-a", "2026-09-22T00:00:00Z"),
             ("asset-b", "2026-09-22T00:00:01Z"),
@@ -1883,7 +1883,7 @@ mod tests {
             )
             .expect("claim active rows");
         assert_eq!(claimed.len(), 2);
-        let conn = store.conn.lock().unwrap();
+        let conn = store.conn.lock();
         queue_projection_with_limits(
             &conn,
             "asset-d",
@@ -1936,7 +1936,7 @@ mod tests {
     #[test]
     fn pruning_removes_aged_work_and_completed_rows() {
         let store = Store::open_in_memory().expect("store");
-        let conn = store.conn.lock().unwrap();
+        let conn = store.conn.lock();
         queue_projection(
             &conn,
             "old-asset",

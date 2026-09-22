@@ -21,20 +21,33 @@ struct StatusPopoverView: View {
         ]
     }
 
+    private static let isoFormatterWithFractions: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static let displayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
+        return f
+    }()
+
     private var formattedLastScan: String {
         guard let iso = viewModel.lastScanTimestamp, !iso.isEmpty else { return "Never" }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var date = formatter.date(from: iso)
+        var date = Self.isoFormatterWithFractions.date(from: iso)
         if date == nil {
-            formatter.formatOptions = [.withInternetDateTime]
-            date = formatter.date(from: iso)
+            date = Self.isoFormatter.date(from: iso)
         }
         guard let validDate = date else { return iso }
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateStyle = .none
-        displayFormatter.timeStyle = .medium
-        return displayFormatter.string(from: validDate)
+        return Self.displayFormatter.string(from: validDate)
     }
 
     var body: some View {

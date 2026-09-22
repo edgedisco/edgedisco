@@ -18,6 +18,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "logs"] }
 prost = "0.14"
 flate2 = "1.1"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3.27"

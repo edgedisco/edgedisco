@@ -3,7 +3,14 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class ClientFailureTests: XCTestCase {
-    func testNegotiateRejectsUnsupportedSelectedVersion() throws {
+    func testOverlongSocketPathsReturnAnErrorInsteadOfCrashing() async {
+        for path in [String(repeating: "x", count: 104), "/tmp/" + String(repeating: "x", count: 200), "/tmp/" + String(repeating: "é", count: 50)] {
+            let state = await EdgeDiscoClient(socketPath: path).status()
+            assertProtocolError(state, contains: "socket path is too long")
+        }
+    }
+
+    func testNegotiateRejectsUnsupportedSelectedVersion() async throws {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
@@ -11,7 +18,7 @@ final class ClientFailureTests: XCTestCase {
             )
         }
 
-        let state = EdgeDiscoClient(socketPath: server.path).negotiate()
+        let state = await EdgeDiscoClient(socketPath: server.path).negotiate()
 
         guard case let .protocolError(message) = state else {
             return XCTFail("expected protocol error, got \(state)")
@@ -20,29 +27,29 @@ final class ClientFailureTests: XCTestCase {
         XCTAssertTrue(server.wait())
     }
 
-    func testOversizedResponseReturnsBoundedError() throws {
+    func testOversizedResponseReturnsBoundedError() async throws {
         let server = try TestUnixServer { _ in
             var data = Data(repeating: 0x61, count: EdgeDiscoClient.maximumResponseBytes + 1)
             data.append(0x0A)
             return data
         }
 
-        let state = EdgeDiscoClient(socketPath: server.path).status()
+        let state = await EdgeDiscoClient(socketPath: server.path).status()
 
         assertProtocolError(state, contains: "exceeds")
         XCTAssertTrue(server.wait())
     }
 
-    func testPartialJSONReturnsBoundedError() throws {
+    func testPartialJSONReturnsBoundedError() async throws {
         let server = try TestUnixServer { _ in Data("{\n".utf8) }
 
-        let state = EdgeDiscoClient(socketPath: server.path).status()
+        let state = await EdgeDiscoClient(socketPath: server.path).status()
 
         assertProtocolError(state, contains: "invalid response")
         XCTAssertTrue(server.wait())
     }
 
-    func testMissingNewlineReturnsBoundedError() throws {
+    func testMissingNewlineReturnsBoundedError() async throws {
         let server = try TestUnixServer { request in
             var frame = responseFrame(
                 request: request,
@@ -52,17 +59,17 @@ final class ClientFailureTests: XCTestCase {
             return frame
         }
 
-        let state = EdgeDiscoClient(socketPath: server.path).status()
+        let state = await EdgeDiscoClient(socketPath: server.path).status()
 
         assertProtocolError(state, contains: "newline")
         XCTAssertTrue(server.wait())
     }
 
-    func testSilentServerTimesOutInUnderThreeSeconds() throws {
+    func testSilentServerTimesOutInUnderThreeSeconds() async throws {
         let server = try TestUnixServer(holdOpen: 3) { _ in nil }
         let started = Date()
 
-        let state = EdgeDiscoClient(socketPath: server.path).status()
+        let state = await EdgeDiscoClient(socketPath: server.path).status()
         let elapsed = Date().timeIntervalSince(started)
 
         assertProtocolError(state, contains: "timed out")
@@ -70,10 +77,10 @@ final class ClientFailureTests: XCTestCase {
         XCTAssertLessThan(elapsed, 3)
     }
 
-    func testScanDisconnectReturnsProtocolError() throws {
+    func testScanDisconnectReturnsProtocolError() async throws {
         let server = try TestUnixServer { _ in nil }
 
-        let result = EdgeDiscoClient(socketPath: server.path).scan()
+        let result = await EdgeDiscoClient(socketPath: server.path).scan()
 
         guard case let .failure(.protocolError(message)) = result else {
             return XCTFail("expected protocol error, got \(result)")

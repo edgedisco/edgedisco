@@ -23,9 +23,9 @@ enum InventoryScope: String, CaseIterable, Identifiable {
 
 @MainActor
 final class StatusViewModel: ObservableObject {
-    typealias StatusFetcher = @Sendable () -> ConnectionState<StatusResult>
-    typealias ScanFetcher = @Sendable () -> Result<ScanResult, IpcError>
-    typealias DetectionsFetcher = @Sendable () -> Result<[SanitizedDetection], IpcError>
+    typealias StatusFetcher = @Sendable () async -> ConnectionState<StatusResult>
+    typealias ScanFetcher = @Sendable () async -> Result<ScanResult, IpcError>
+    typealias DetectionsFetcher = @Sendable () async -> Result<[SanitizedDetection], IpcError>
 
     @Published private(set) var state: StatusPresentationState = .daemonNotRunning
     @Published private(set) var assetCount = 0
@@ -65,10 +65,8 @@ final class StatusViewModel: ObservableObject {
     func refresh() async {
         let generation = generation
         let client = EdgeDiscoClient(socketPath: scope.socketPath)
-        let statusFetcher = statusFetcher ?? { client.status() }
-        let connectionState = await Task.detached(priority: .utility) {
-            statusFetcher()
-        }.value
+        let statusFetcher = statusFetcher ?? { await client.status() }
+        let connectionState = await statusFetcher()
         guard generation == self.generation else { return }
         apply(connectionState)
     }
@@ -80,10 +78,8 @@ final class StatusViewModel: ObservableObject {
 
         let generation = generation
         let client = EdgeDiscoClient(socketPath: scope.socketPath)
-        let scanFetcher = scanFetcher ?? { client.scan() }
-        let result = await Task.detached(priority: .utility) {
-            scanFetcher()
-        }.value
+        let scanFetcher = scanFetcher ?? { await client.scan() }
+        let result = await scanFetcher()
         guard generation == self.generation else { return }
         switch result {
         case let .success(scan):
@@ -103,10 +99,8 @@ final class StatusViewModel: ObservableObject {
 
         let generation = generation
         let client = EdgeDiscoClient(socketPath: scope.socketPath)
-        let detectionsFetcher = detectionsFetcher ?? { client.detections() }
-        let result = await Task.detached(priority: .utility) {
-            detectionsFetcher()
-        }.value
+        let detectionsFetcher = detectionsFetcher ?? { await client.detections() }
+        let result = await detectionsFetcher()
         guard generation == self.generation else { return }
         switch result {
         case let .success(detections):

@@ -62,7 +62,7 @@ struct SettingsView: View {
         busy = true
         defer { busy = false }
         let path = selected.socketPath
-        let result = await Task.detached(priority: .utility) { EdgeDiscoClient(socketPath: path).settings() }.value
+        let result = await EdgeDiscoClient(socketPath: path).settings()
         guard scope == selected else { return }
         switch result {
         case let .connected(value):
@@ -83,8 +83,7 @@ struct SettingsView: View {
 
     private func apply() async {
         guard let snapshot, snapshot.writable else { return }
-        guard let seconds = UInt64(interval), seconds > 0,
-              let batch = Int(batchSize), batch > 0 else {
+        guard let numbers = SettingsNumericInput(interval: interval, batchSize: batchSize) else {
             message = "Interval and batch size must be positive whole numbers."
             return
         }
@@ -93,14 +92,12 @@ struct SettingsView: View {
             message = "Enter an OTLP endpoint before enabling export."
             return
         }
-        let settings = DaemonSettings(intervalSeconds: seconds, otlpEndpoint: trimmed.isEmpty ? nil : trimmed, otlpBatchSize: batch, exportEnabled: enabled)
+        let settings = DaemonSettings(intervalSeconds: numbers.intervalSeconds, otlpEndpoint: trimmed.isEmpty ? nil : trimmed, otlpBatchSize: numbers.batchSize, exportEnabled: enabled)
         let selected = scope
         busy = true
         defer { busy = false }
         let path = selected.socketPath
-        let result = await Task.detached(priority: .utility) {
-            EdgeDiscoClient(socketPath: path).applySettings(settings, expectedRevision: snapshot.revision)
-        }.value
+        let result = await EdgeDiscoClient(socketPath: path).applySettings(settings, expectedRevision: snapshot.revision)
         guard scope == selected else { return }
         switch result {
         case let .connected(value):

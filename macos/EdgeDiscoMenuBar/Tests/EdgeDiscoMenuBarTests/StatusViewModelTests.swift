@@ -13,17 +13,17 @@ final class StatusViewModelTests: XCTestCase {
 
     func testLateResponseFromPreviousScopeCannotPopulateNewScope() async {
         let started = expectation(description: "old scope request started")
-        let release = DispatchSemaphore(value: 0)
+        let release = AsyncGate()
         let viewModel = StatusViewModel(statusFetcher: {
             started.fulfill()
-            release.wait()
+            await release.wait()
             return .connected(StatusResult(healthy: true, startedAt: "now", lastScanAt: nil,
                 lastScanAssetCount: 99, deviceCount: 1, detectionCount: 99))
         })
         let task = Task { await viewModel.refresh() }
         await fulfillment(of: [started], timeout: 1)
         viewModel.scope = .system
-        release.signal()
+        await release.open()
         await task.value
         XCTAssertEqual(viewModel.assetCount, 0)
         XCTAssertFalse(viewModel.isHealthy)
@@ -118,10 +118,10 @@ final class StatusViewModelTests: XCTestCase {
 
     func testScanNowIsInFlightUntilFetcherCompletesAndUpdatesAssetCount() async {
         let started = expectation(description: "scan dispatched")
-        let release = DispatchSemaphore(value: 0)
+        let release = AsyncGate()
         let viewModel = StatusViewModel(scanFetcher: {
             started.fulfill()
-            release.wait()
+            await release.wait()
             return .success(ScanResult(accepted: true, assetCount: 14))
         })
 
@@ -130,7 +130,7 @@ final class StatusViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.isScanning)
 
-        release.signal()
+        await release.open()
         await task.value
 
         XCTAssertFalse(viewModel.isScanning)
@@ -184,5 +184,21 @@ final class StatusViewModelTests: XCTestCase {
 
         XCTAssertEqual(running.runningLabel, "Running")
         XCTAssertEqual(stopped.runningLabel, "Not running")
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
     }
 }

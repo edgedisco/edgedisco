@@ -7,7 +7,7 @@ final class TestUnixServer {
     typealias Responder = (Data) -> Data?
 
     let path: String
-    private let listener: Int32
+    private var listener: Int32
     private let responder: Responder
     private let holdOpen: TimeInterval
     private let queue = DispatchQueue(label: "EdgeDiscoIPCTests.TestUnixServer")
@@ -47,11 +47,18 @@ final class TestUnixServer {
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
 
-        queue.async { [self] in serveOneConnection() }
+        queue.async { [weak self] in self?.serveOneConnection() }
     }
 
     deinit {
-        Darwin.close(listener)
+        stop()
+    }
+
+    func stop() {
+        if listener >= 0 {
+            Darwin.close(listener)
+            listener = -1
+        }
         unlink(path)
     }
 

@@ -206,6 +206,7 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     let mut active = resolved.clone();
     let mut interval = tokio::time::interval(Duration::from_secs(active.interval));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -227,6 +228,7 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
                 if changed.is_ok() {
                     active = settings_rx.borrow_and_update().clone();
                     interval = tokio::time::interval(Duration::from_secs(active.interval));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 }
             }
             _ = signal::ctrl_c() => {

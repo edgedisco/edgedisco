@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Network
 
 public enum ConnectionState<Value: Equatable & Sendable>: Equatable, Sendable {
     case connected(Value)
@@ -71,8 +72,8 @@ public struct EdgeDiscoClient: Sendable {
         pathSource = .resolved(resolver)
     }
 
-    public func negotiate() -> ConnectionState<NegotiateResult> {
-        let state: ConnectionState<NegotiateResult> = perform(method: "negotiate")
+    public func negotiate() async -> ConnectionState<NegotiateResult> {
+        let state: ConnectionState<NegotiateResult> = await perform(method: "negotiate")
         guard case let .connected(result) = state else { return state }
         guard result.protocolVersion == edgeDiscoProtocolVersion,
               result.supportedVersions.contains(edgeDiscoProtocolVersion)
@@ -82,24 +83,24 @@ public struct EdgeDiscoClient: Sendable {
         return state
     }
 
-    public func status() -> ConnectionState<StatusResult> {
-        perform(method: "status")
+    public func status() async -> ConnectionState<StatusResult> {
+        await perform(method: "status")
     }
 
-    public func settings() -> ConnectionState<SettingsSnapshot> {
-        perform(method: "settings_get")
+    public func settings() async -> ConnectionState<SettingsSnapshot> {
+        await perform(method: "settings_get")
     }
 
-    public func applySettings(_ settings: DaemonSettings, expectedRevision: String) -> ConnectionState<SettingsSnapshot> {
-        perform(method: "settings_set", payload: SettingsUpdateRequest(expectedRevision: expectedRevision, settings: settings))
+    public func applySettings(_ settings: DaemonSettings, expectedRevision: String) async -> ConnectionState<SettingsSnapshot> {
+        await perform(method: "settings_set", payload: SettingsUpdateRequest(expectedRevision: expectedRevision, settings: settings))
     }
 
-    public func scan() -> Result<ScanResult, IpcError> {
-        result(from: perform(method: "scan", timeout: Self.explicitScanTimeout))
+    public func scan() async -> Result<ScanResult, IpcError> {
+        result(from: await perform(method: "scan", timeout: Self.explicitScanTimeout))
     }
 
-    public func detections() -> Result<[SanitizedDetection], IpcError> {
-        let state: ConnectionState<DetectionsResult> = perform(method: "detections")
+    public func detections() async -> Result<[SanitizedDetection], IpcError> {
+        let state: ConnectionState<DetectionsResult> = await perform(method: "detections")
         switch state {
         case let .connected(result):
             return .success(result.detections)
@@ -122,7 +123,7 @@ public struct EdgeDiscoClient: Sendable {
         method: String,
         payload: SettingsUpdateRequest? = nil,
         timeout: TimeInterval = Self.timeout
-    ) -> ConnectionState<Result> {
+    ) async -> ConnectionState<Result> {
         guard let socketPath = pathSource.path() else { return .daemonNotRunning }
         let requestID = UUID().uuidString
         let request = IpcRequest(
@@ -138,7 +139,7 @@ public struct EdgeDiscoClient: Sendable {
             guard frame.count <= Self.maximumRequestBytes else {
                 return .protocolError("request exceeds \(Self.maximumRequestBytes)-byte limit")
             }
-            let responseData = try exchange(frame: frame, at: socketPath, timeout: timeout)
+            let responseData = try await exchange(frame: frame, at: socketPath, timeout: timeout)
             let response = try JSONDecoder().decode(IpcResponse<Result>.self, from: responseData)
             guard response.protocolVersion == edgeDiscoProtocolVersion else {
                 return .protocolError("unsupported response protocol version \(response.protocolVersion)")
@@ -163,107 +164,119 @@ public struct EdgeDiscoClient: Sendable {
         }
     }
 
-    private func exchange(frame: Data, at path: String, timeout requestTimeout: TimeInterval) throws -> Data {
-        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else {
-            throw TransportFailure.message("could not create Unix socket: \(posixMessage())")
-        }
-        defer { Darwin.close(descriptor) }
-
-        var noSigPipe: Int32 = 1
-        guard setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_NOSIGPIPE,
-            &noSigPipe,
-            socklen_t(MemoryLayout.size(ofValue: noSigPipe))
-        ) == 0 else {
-            throw TransportFailure.message("could not configure Unix socket: \(posixMessage())")
-        }
-        var timeout = timeval(tv_sec: Int(requestTimeout), tv_usec: 0)
-        guard setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_RCVTIMEO,
-            &timeout,
-            socklen_t(MemoryLayout.size(ofValue: timeout))
-        ) == 0,
-        setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_SNDTIMEO,
-            &timeout,
-            socklen_t(MemoryLayout.size(ofValue: timeout))
-        ) == 0 else {
-            throw TransportFailure.message("could not configure IPC timeouts: \(posixMessage())")
-        }
-
-        var address = sockaddr_un()
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        address.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(path.utf8) + [0]
-        guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            throw TransportFailure.message("Unix socket path is too long")
-        }
-        withUnsafeMutableBytes(of: &address.sun_path) { destination in
-            destination.copyBytes(from: pathBytes)
-        }
-        let connected = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connected == 0 else {
-            if errno == ENOENT || errno == ECONNREFUSED { throw TransportFailure.daemonNotRunning }
-            throw TransportFailure.message("could not connect to daemon: \(posixMessage())")
-        }
-
-        try frame.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            var written = 0
-            while written < bytes.count {
-                let count = Darwin.send(descriptor, base.advanced(by: written), bytes.count - written, 0)
-                if count > 0 {
-                    written += count
-                    continue
-                }
-                if count < 0, errno == EINTR { continue }
-                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                    throw TransportFailure.message("request write timed out")
-                }
-                throw TransportFailure.message("could not write request: \(posixMessage())")
-            }
-        }
-
-        var response = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = recv(descriptor, &buffer, buffer.count, 0)
-            if count > 0 {
-                for byte in buffer.prefix(count) {
-                    response.append(byte)
-                    if response.count > Self.maximumResponseBytes {
-                        throw TransportFailure.message("response exceeds \(Self.maximumResponseBytes)-byte limit")
-                    }
-                    if byte == 0x0A {
-                        response.removeLast()
-                        return response
-                    }
-                }
-                continue
-            }
-            if count == 0 {
-                throw TransportFailure.message("response ended before newline terminator")
-            }
-            if errno == EINTR { continue }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                throw TransportFailure.message("response read timed out")
-            }
-            throw TransportFailure.message("could not read response: \(posixMessage())")
+    private final class ExchangeState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isResumed = false
+        func markResumed() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            let old = isResumed
+            isResumed = true
+            return !old
         }
     }
 
-    private func posixMessage() -> String {
-        String(cString: strerror(errno))
+    private func exchange(frame: Data, at path: String, timeout requestTimeout: TimeInterval) async throws -> Data {
+        let address = sockaddr_un()
+        guard path.utf8.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            throw TransportFailure.message("Unix socket path is too long")
+        }
+        let connection = NWConnection(to: .unix(path: path), using: .tcp)
+        let state = ExchangeState()
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let timeoutTask = Task {
+                try await Task.sleep(nanoseconds: UInt64(requestTimeout * 1_000_000_000))
+                if state.markResumed() {
+                    connection.cancel()
+                    continuation.resume(throwing: TransportFailure.message("request timed out"))
+                }
+            }
+
+            connection.stateUpdateHandler = { nwState in
+                switch nwState {
+                case .ready:
+                    connection.send(content: frame, completion: .contentProcessed({ error in
+                        if let error = error {
+                            if state.markResumed() {
+                                timeoutTask.cancel()
+                                connection.cancel()
+                                continuation.resume(throwing: TransportFailure.message("could not write request: \(error.localizedDescription)"))
+                            }
+                            return
+                        }
+
+                        var response = Data()
+
+                        func receiveNext() {
+                            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                                if let data = data {
+                                    response.append(data)
+
+                                    if response.count > Self.maximumResponseBytes {
+                                        if state.markResumed() {
+                                            timeoutTask.cancel()
+                                            connection.cancel()
+                                            continuation.resume(throwing: TransportFailure.message("response exceeds \(Self.maximumResponseBytes)-byte limit"))
+                                        }
+                                        return
+                                    }
+
+                                    if let newlineIndex = response.firstIndex(of: 0x0A) {
+                                        if state.markResumed() {
+                                            timeoutTask.cancel()
+                                            connection.cancel()
+                                            continuation.resume(returning: response[..<newlineIndex])
+                                        }
+                                        return
+                                    }
+                                }
+
+                                if let error = error {
+                                    if state.markResumed() {
+                                        timeoutTask.cancel()
+                                        connection.cancel()
+                                        continuation.resume(throwing: TransportFailure.message("could not read response: \(error.localizedDescription)"))
+                                    }
+                                    return
+                                }
+
+                                if isComplete {
+                                    if state.markResumed() {
+                                        timeoutTask.cancel()
+                                        connection.cancel()
+                                        continuation.resume(throwing: TransportFailure.message("response ended before newline terminator"))
+                                    }
+                                    return
+                                }
+
+                                receiveNext()
+                            }
+                        }
+
+                        receiveNext()
+                    }))
+                case .failed(let error), .waiting(let error):
+                    if state.markResumed() {
+                        timeoutTask.cancel()
+                        connection.cancel()
+                        if error == NWError.posix(.ENOENT) || error == NWError.posix(.ECONNREFUSED) {
+                            continuation.resume(throwing: TransportFailure.daemonNotRunning)
+                        } else {
+                            continuation.resume(throwing: TransportFailure.message("could not connect to daemon: \(error.localizedDescription)"))
+                        }
+                    }
+                case .cancelled:
+                    if state.markResumed() {
+                        timeoutTask.cancel()
+                        continuation.resume(throwing: TransportFailure.message("connection cancelled"))
+                    }
+                default:
+                    break
+                }
+            }
+
+            connection.start(queue: .global())
+        }
     }
 }
