@@ -114,6 +114,10 @@ pub struct DaemonArgs {
     #[arg(long, default_value_t = 100)]
     pub otlp_batch_size: usize,
 
+    /// Internal override from the versioned settings file.
+    #[arg(skip)]
+    pub export_enabled: Option<bool>,
+
     /// Unix-domain socket path for local IPC (defaults by IPC mode)
     #[arg(long)]
     pub ipc_socket: Option<PathBuf>,

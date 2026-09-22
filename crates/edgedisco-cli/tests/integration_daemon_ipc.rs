@@ -65,6 +65,7 @@ fn compiled_daemon_serves_ipc_scans_and_cleans_up_on_sigint() {
             "--ipc-socket",
             socket.to_str().unwrap(),
         ])
+        .env("HOME", temp.path())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

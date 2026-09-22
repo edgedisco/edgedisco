@@ -2,6 +2,40 @@ use clap::Parser;
 use edgedisco_cli::{config, Cli, Commands};
 use tempfile::tempdir;
 
+#[test]
+fn settings_updates_persist_and_reject_stale_or_invalid_revisions() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config/daemon.json");
+    let cli = Cli::parse_from(["edgedisco", "daemon"]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    let (tx, rx) = tokio::sync::watch::channel(args.clone());
+    let manager = config::SettingsManager::new(Some(path.clone()), args.clone(), args, tx);
+    let first = manager.snapshot();
+    let mut settings = config::Settings::from_args(&rx.borrow());
+    settings.interval_seconds = Some(125);
+    settings.otlp_endpoint = Some("http://127.0.0.1:4318/v1/logs".into());
+    settings.export_enabled = Some(true);
+    let updated = manager
+        .update(first["revision"].as_str().unwrap(), settings.clone())
+        .unwrap();
+    assert_eq!(rx.borrow().interval, 125);
+    let mut restarted = rx.borrow().clone();
+    restarted.config = Some(path.clone());
+    assert_eq!(config::resolve(&restarted).unwrap().interval, 125);
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(manager
+        .update(first["revision"].as_str().unwrap(), settings.clone())
+        .is_err());
+    settings.interval_seconds = Some(0);
+    assert!(manager
+        .update(updated["revision"].as_str().unwrap(), settings)
+        .is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(rx.borrow().interval, 125);
+}
+
 #[tokio::test]
 async fn readiness_retries_bad_response_then_accepts_healthy_status() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

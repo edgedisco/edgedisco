@@ -91,8 +91,15 @@ IPC. Configuration currently supports JSON schema 1 and requires service restart
   Detection refresh failures retain an explicit stale-data warning. The popover
   labels observation counts as Last scan findings.
 - Remaining: static app/extension/MCP collectors, combined product counts,
-  interactive window QA and login/upgrade validation, Settings with authorized
-  live reload, and export diagnostics. No installed services have been changed.
+  interactive window QA and login/upgrade validation, explicit OTLP connection
+  testing, and export diagnostics. No installed services have been changed.
+- The native Settings window now reads either daemon's effective configuration.
+  My Session settings are stored at `~/.edgedisco/config/daemon.json`, with
+  interval, OTLP enablement, endpoint, and batch size applied live after an
+  atomic save. Updates carry a revision; stale and invalid writes are rejected.
+  This Mac is read-only in the UI: its administrator-managed configuration still
+  requires a service restart. Saving an endpoint is not evidence that export
+  succeeded; connection testing and delivery diagnostics remain separate work.
 - Continuation checks: 10 menu-bar tests, 16 IPC tests, and 18 package tests passed.
 - Validation: full Rust workspace suite passed; Clippy with warnings denied,
   formatting, and diff checks passed. No installed services were changed.

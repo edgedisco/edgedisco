@@ -10,6 +10,7 @@ struct StatusPopoverView: View {
     @ObservedObject var viewModel: StatusViewModel
     let quitAction: () -> Void
     let openInventory: () -> Void
+    let openSettings: () -> Void
 
     private var buildMetadata: [(String, String)] {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -108,6 +109,7 @@ struct StatusPopoverView: View {
                 .disabled(viewModel.isScanning)
 
                 Button("Open Inventory", action: openInventory)
+                Button("Settings…", action: openSettings)
             }
 
             Divider()

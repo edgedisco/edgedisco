@@ -1,3 +1,4 @@
+use crate::config::{Settings, SettingsManager};
 use edgedisco_core::store::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -197,12 +198,14 @@ pub struct ScanCommand {
     pub reply: oneshot::Sender<Result<usize, String>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IpcRequest {
     pub protocol_version: u16,
     pub request_id: String,
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -296,6 +299,7 @@ pub struct IpcServer {
     store: Arc<Store>,
     state: Arc<DaemonIpcState>,
     scan_tx: mpsc::Sender<ScanCommand>,
+    settings: Option<Arc<SettingsManager>>,
     socket_guard: SocketGuard,
 }
 
@@ -328,8 +332,14 @@ impl IpcServer {
             store,
             state,
             scan_tx,
+            settings: None,
             socket_guard,
         })
+    }
+
+    pub fn with_settings(mut self, settings: Arc<SettingsManager>) -> Self {
+        self.settings = Some(settings);
+        self
     }
 
     pub async fn serve(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), IpcError> {
@@ -354,9 +364,10 @@ impl IpcServer {
                     let store = Arc::clone(&self.store);
                     let state = Arc::clone(&self.state);
                     let scan_tx = self.scan_tx.clone();
+                    let settings = self.settings.clone();
                     clients.spawn(async move {
                         let _permit = permit;
-                        let _ = handle_client(stream, policy, limits, store, state, scan_tx).await;
+                        let _ = handle_client(stream, policy, limits, store, state, scan_tx, settings).await;
                     });
                 }
                 Some(joined) = clients.join_next(), if !clients.is_empty() => {
@@ -386,6 +397,7 @@ async fn handle_client(
     store: Arc<Store>,
     state: Arc<DaemonIpcState>,
     scan_tx: mpsc::Sender<ScanCommand>,
+    settings: Option<Arc<SettingsManager>>,
 ) -> Result<(), io::Error> {
     let peer = peer_identity(&stream)?;
     if !policy.authorize(peer) {
@@ -403,25 +415,35 @@ async fn handle_client(
     })
     .await;
 
-    let response = match read {
-        Err(_) => IpcResponse::error(None, "read_timeout", "request read timed out"),
-        Ok(Err(error)) => return Err(error),
-        Ok(Ok(0)) => return Ok(()),
-        Ok(Ok(_)) if frame.len() > limits.max_request_bytes => IpcResponse::error(
-            None,
-            "frame_too_large",
-            "request exceeds maximum frame size",
-        ),
-        Ok(Ok(_)) if frame.last() != Some(&b'\n') => {
-            IpcResponse::error(None, "partial_frame", "request must end with a newline")
-        }
-        Ok(Ok(_)) => match serde_json::from_slice::<IpcRequest>(&frame) {
-            Ok(request) => process_request(request, &store, &state, &scan_tx, &limits).await,
-            Err(_) => {
-                IpcResponse::error(None, "malformed_json", "request is not valid protocol JSON")
+    let response =
+        match read {
+            Err(_) => IpcResponse::error(None, "read_timeout", "request read timed out"),
+            Ok(Err(error)) => return Err(error),
+            Ok(Ok(0)) => return Ok(()),
+            Ok(Ok(_)) if frame.len() > limits.max_request_bytes => IpcResponse::error(
+                None,
+                "frame_too_large",
+                "request exceeds maximum frame size",
+            ),
+            Ok(Ok(_)) if frame.last() != Some(&b'\n') => {
+                IpcResponse::error(None, "partial_frame", "request must end with a newline")
             }
-        },
-    };
+            Ok(Ok(_)) => match serde_json::from_slice::<IpcRequest>(&frame) {
+                Ok(request) => process_request(
+                    request,
+                    &store,
+                    &state,
+                    &scan_tx,
+                    &limits,
+                    matches!(&policy, PeerPolicy::User { daemon_uid } if peer.uid == *daemon_uid),
+                    settings.as_deref(),
+                )
+                .await,
+                Err(_) => {
+                    IpcResponse::error(None, "malformed_json", "request is not valid protocol JSON")
+                }
+            },
+        };
 
     let mut bytes = match serde_json::to_vec(&response) {
         Ok(bytes) if bytes.len() < limits.max_response_bytes => bytes,
@@ -451,6 +473,8 @@ async fn process_request(
     state: &DaemonIpcState,
     scan_tx: &mpsc::Sender<ScanCommand>,
     limits: &IpcLimits,
+    may_write_settings: bool,
+    settings: Option<&SettingsManager>,
 ) -> IpcResponse {
     if request.request_id.is_empty() || request.request_id.len() > 128 {
         return IpcResponse::error(
@@ -468,6 +492,55 @@ async fn process_request(
     }
 
     match request.method.as_str() {
+        "settings_get" => match settings {
+            Some(settings) => IpcResponse::ok(request.request_id, settings.snapshot()),
+            None => IpcResponse::error(
+                Some(request.request_id),
+                "settings_unavailable",
+                "settings are unavailable",
+            ),
+        },
+        "settings_set" => {
+            let Some(settings) = settings else {
+                return IpcResponse::error(
+                    Some(request.request_id),
+                    "settings_unavailable",
+                    "settings are unavailable",
+                );
+            };
+            if !may_write_settings {
+                return IpcResponse::error(
+                    Some(request.request_id),
+                    "permission_denied",
+                    "settings are read-only for this connection",
+                );
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct UpdatePayload {
+                expected_revision: String,
+                settings: Settings,
+            }
+            let payload = match request
+                .payload
+                .and_then(|value| serde_json::from_value::<UpdatePayload>(value).ok())
+            {
+                Some(payload) => payload,
+                None => {
+                    return IpcResponse::error(
+                        Some(request.request_id),
+                        "invalid_settings",
+                        "settings update payload is invalid",
+                    )
+                }
+            };
+            match settings.update(&payload.expected_revision, payload.settings) {
+                Ok(result) => IpcResponse::ok(request.request_id, result),
+                Err(message) => {
+                    IpcResponse::error(Some(request.request_id), "settings_rejected", message)
+                }
+            }
+        }
         "negotiate" => IpcResponse::ok(
             request.request_id,
             json!({"protocol_version": PROTOCOL_VERSION, "supported_versions": [PROTOCOL_VERSION]}),
