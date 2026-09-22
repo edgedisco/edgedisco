@@ -109,6 +109,14 @@ public struct ScanResult: Codable, Equatable, Sendable {
     }
 }
 
+public struct DetectionsResult: Codable, Equatable, Sendable {
+    public let detections: [SanitizedDetection]
+
+    public init(detections: [SanitizedDetection]) {
+        self.detections = detections
+    }
+}
+
 public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     public let kind: String
     public let name: String

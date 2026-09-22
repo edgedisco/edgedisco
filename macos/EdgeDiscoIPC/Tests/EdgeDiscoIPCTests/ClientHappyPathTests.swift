@@ -73,7 +73,7 @@ final class ClientHappyPathTests: XCTestCase {
         let server = try TestUnixServer { request in
             responseFrame(
                 request: request,
-                resultJSON: #"[{"kind":"desktop_app","name":"Claude","vendor":"Anthropic","version":"1.2.3","running":true,"present":true,"last_seen":"2026-09-22T10:00:00Z","unexpected":"ignored"}]"#
+                resultJSON: #"{"detections":[{"kind":"desktop_app","name":"Claude","vendor":"Anthropic","version":"1.2.3","running":true,"present":true,"last_seen":"2026-09-22T10:00:00Z","unexpected":"ignored"}]}"#
             )
         }
         let client = EdgeDiscoClient(socketPath: server.path)

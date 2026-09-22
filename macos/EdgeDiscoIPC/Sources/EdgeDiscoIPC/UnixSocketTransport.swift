@@ -91,7 +91,15 @@ public struct EdgeDiscoClient: Sendable {
     }
 
     public func detections() -> Result<[SanitizedDetection], IpcError> {
-        result(from: perform(method: "detections"))
+        let state: ConnectionState<DetectionsResult> = perform(method: "detections")
+        switch state {
+        case let .connected(result):
+            return .success(result.detections)
+        case .daemonNotRunning:
+            return .failure(.daemonNotRunning)
+        case let .protocolError(message):
+            return .failure(.protocolError(message))
+        }
     }
 
     private func result<Value>(from state: ConnectionState<Value>) -> Result<Value, IpcError> {
