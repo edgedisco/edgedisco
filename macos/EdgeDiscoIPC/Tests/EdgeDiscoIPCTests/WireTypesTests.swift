@@ -2,6 +2,16 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class WireTypesTests: XCTestCase {
+    func testExportDiagnosticsDecodesSafeAggregateFields() throws {
+        let data = Data(#"{"queued":2,"delivered_total":7,"retried_total":1,"failed_total":0,"dropped_total":3,"last_success_at":"2026-09-22T00:00:00Z","last_failure_at":null}"#.utf8)
+        let diagnostics = try JSONDecoder().decode(ExportDiagnostics.self, from: data)
+        XCTAssertEqual(diagnostics.queued, 2)
+        XCTAssertEqual(diagnostics.deliveredTotal, 7)
+        XCTAssertEqual(diagnostics.droppedTotal, 3)
+        XCTAssertEqual(diagnostics.lastSuccessAt, "2026-09-22T00:00:00Z")
+        XCTAssertNil(diagnostics.lastFailureAt)
+    }
+
     func testDetectionDecodesOptionalCatalogProductIdentity() throws {
         let data = Data(#"{"id":"finding","product_id":"catalog-key","kind":"process","name":"Agent","vendor":"Example","version":null,"running":true,"present":true,"last_seen":null}"#.utf8)
         let detection = try JSONDecoder().decode(SanitizedDetection.self, from: data)

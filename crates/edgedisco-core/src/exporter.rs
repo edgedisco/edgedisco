@@ -85,6 +85,23 @@ pub struct ExportOutcome {
     pub http_status: Option<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConnectionTestResult {
+    pub accepted: bool,
+    pub status: &'static str,
+    pub http_status: Option<u16>,
+}
+
+impl ConnectionTestResult {
+    fn new(accepted: bool, status: &'static str, http_status: Option<u16>) -> Self {
+        Self {
+            accepted,
+            status,
+            http_status,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ExportError {
     #[error("invalid exporter configuration: {0}")]
@@ -577,6 +594,63 @@ fn classify_success_response(body: &[u8]) -> Result<bool, ExportError> {
 }
 
 impl OtlpExporter {
+    /// Send an empty OTLP Logs request. This tests transport/auth/protocol only:
+    /// it neither claims outbox rows nor records a delivery.
+    pub async fn test_connection(&self) -> ConnectionTestResult {
+        let payload = ExportLogsServiceRequest {
+            resource_logs: Vec::new(),
+        }
+        .encode_to_vec();
+        let payload = if self.config.compression {
+            match gzip_payload(&payload) {
+                Ok(payload) => payload,
+                Err(_) => return ConnectionTestResult::new(false, "probe_error", None),
+            }
+        } else {
+            payload
+        };
+        let mut request = self
+            .client
+            .post(&self.config.endpoint)
+            .header(header::CONTENT_TYPE, OTLP_CONTENT_TYPE)
+            .header(
+                header::USER_AGENT,
+                format!("edgedisco/{}", env!("CARGO_PKG_VERSION")),
+            );
+        if self.config.compression {
+            request = request.header(header::CONTENT_ENCODING, "gzip");
+        } else {
+            request = request.header(header::CONTENT_LENGTH, "0");
+        }
+        let mut response = match request.body(payload).send().await {
+            Ok(response) => response,
+            Err(error) if error.is_timeout() => {
+                return ConnectionTestResult::new(false, "timeout", None)
+            }
+            Err(_) => return ConnectionTestResult::new(false, "transport_error", None),
+        };
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            return ConnectionTestResult::new(false, "http_rejected", Some(status));
+        }
+        const MAX_PROBE_RESPONSE: usize = 16 * 1024;
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if body.len() + chunk.len() <= MAX_PROBE_RESPONSE => {
+                    body.extend_from_slice(&chunk)
+                }
+                Ok(None) => break,
+                _ => return ConnectionTestResult::new(false, "invalid_response", Some(status)),
+            }
+        }
+        match classify_success_response(&body) {
+            Ok(false) => ConnectionTestResult::new(true, "accepted", Some(status)),
+            Ok(true) => ConnectionTestResult::new(false, "partial_rejection", Some(status)),
+            Err(_) => ConnectionTestResult::new(false, "invalid_response", Some(status)),
+        }
+    }
+
     pub fn new(config: ExporterConfig) -> Result<Self, ExportError> {
         if config.batch_records == 0 || config.batch_bytes <= 0 || config.request_timeout.is_zero()
         {
@@ -911,6 +985,55 @@ impl OtlpExporter {
 mod tests {
     use super::*;
     use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsPartialSuccess;
+
+    #[tokio::test]
+    async fn connection_probe_sends_no_records_and_redacts_rejection_body() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        for (response, accepted, status) in [
+            (
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+                true,
+                "accepted",
+            ),
+            (
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 13\r\n\r\nSECRET-denied",
+                false,
+                "http_rejected",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let reply = response.to_owned();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                assert!(headers.starts_with("post /v1/logs http/1.1"));
+                assert!(headers.contains("content-type: application/x-protobuf"));
+                assert!(headers.contains("content-length: 0"));
+                stream.write_all(reply.as_bytes()).unwrap();
+            });
+            let mut config = ExporterConfig::for_endpoint(format!("http://{address}/v1/logs"));
+            config.request_timeout = Duration::from_secs(3);
+            let result = OtlpExporter::new(config).unwrap().test_connection().await;
+            server.join().unwrap();
+            assert_eq!(result.accepted, accepted);
+            assert_eq!(result.status, status);
+            assert!(!serde_json::to_string(&result).unwrap().contains("SECRET"));
+        }
+    }
 
     #[test]
     fn success_response_requires_valid_protobuf_and_detects_rejections() {

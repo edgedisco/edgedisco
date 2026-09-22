@@ -3,6 +3,22 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class ClientHappyPathTests: XCTestCase {
+    func testOTLPConnectionUsesExplicitMethodAndDecodesResult() async throws {
+        let server = try TestUnixServer { request in
+            responseFrame(request: request, resultJSON: #"{"accepted":true,"status":"accepted","http_status":200}"#)
+        }
+        let result = await EdgeDiscoClient(socketPath: server.path).testOTLPConnection()
+        guard case let .connected(probe) = result else {
+            return XCTFail("expected probe result")
+        }
+        XCTAssertTrue(probe.accepted)
+        XCTAssertEqual(probe.httpStatus, 200)
+        XCTAssertTrue(server.wait())
+        let request = try JSONDecoder().decode(IpcRequest.self, from: server.snapshot().frame.dropLast())
+        XCTAssertEqual(request.method, "otlp_test_connection")
+        XCTAssertEqual(EdgeDiscoClient.connectionTestTimeout, 12)
+    }
+
     func testStatusUsesOneNewlineTerminatedConnectionAndDecodesResult() async throws {
         let server = try TestUnixServer { request in
             responseFrame(

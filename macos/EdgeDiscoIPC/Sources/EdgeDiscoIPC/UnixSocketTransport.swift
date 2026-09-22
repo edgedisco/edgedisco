@@ -44,6 +44,7 @@ public struct EdgeDiscoClient: Sendable {
     public static let maximumResponseBytes = 256 * 1024
     public static let timeout: TimeInterval = 2
     public static let explicitScanTimeout: TimeInterval = 120
+    public static let connectionTestTimeout: TimeInterval = 12
 
     private enum PathSource: Sendable {
         case fixed(String)
@@ -89,6 +90,14 @@ public struct EdgeDiscoClient: Sendable {
 
     public func settings() async -> ConnectionState<SettingsSnapshot> {
         await perform(method: "settings_get")
+    }
+
+    public func exportDiagnostics() async -> ConnectionState<ExportDiagnostics> {
+        await perform(method: "export_diagnostics")
+    }
+
+    public func testOTLPConnection() async -> ConnectionState<ConnectionTestResult> {
+        await perform(method: "otlp_test_connection", timeout: Self.connectionTestTimeout)
     }
 
     public func applySettings(_ settings: DaemonSettings, expectedRevision: String) async -> ConnectionState<SettingsSnapshot> {

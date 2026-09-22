@@ -7,9 +7,8 @@ inventory window, Settings, and diagnostics. The native collector must first reg
 the Python inventory coverage that makes installed but idle tools visible.
 
 Current evidence: Rust collects processes, containers, installed CLIs, bounded
-macOS app bundles, and VS Code-compatible extensions. Python additionally
-inventories JetBrains plugins. Native discovery now
-inventories MCP configuration and direct JetBrains plugin manifests. User and system daemons
+macOS app bundles, VS Code-compatible extensions, MCP configuration, and known
+JetBrains plugins. User and system daemons
 expose separate inventory scopes. User settings support live updates; system
 settings still require administrator-managed configuration and restart.
 
@@ -123,15 +122,24 @@ settings still require administrator-managed configuration and restart.
 - Added bounded, no-follow SHA-256 evidence for macOS bundle executables named
   in `Info.plist`. Unreadable, symlinked, and oversized executables leave the
   app visible without binary evidence.
-- Remaining: interactive window QA and login/upgrade validation, explicit OTLP connection
-  testing, and export diagnostics. No installed services have been changed.
+- Read-only OTLP export diagnostics now report queued records, cumulative
+  delivered/retried/failed/dropped counts, and last success/failure timestamps
+  through scope-specific IPC and the Settings window. They expose no payloads,
+  endpoints, or credentials.
+- Added an explicit saved-endpoint OTLP connection probe. It sends an empty
+  request using configured transport and authentication, checks a bounded OTLP
+  response, and never claims outbox rows or records a delivery. HTTP status and
+  coarse failure categories are shown without collector response bodies.
+- Remaining: interactive window QA and login/upgrade validation. No installed
+  services have been changed.
 - The native Settings window now reads either daemon's effective configuration.
   My Session settings are stored at `~/.edgedisco/config/daemon.json`, with
   interval, OTLP enablement, endpoint, and batch size applied live after an
   atomic save. Updates carry a revision; stale and invalid writes are rejected.
   This Mac is read-only in the UI: its administrator-managed configuration still
   requires a service restart. Saving an endpoint is not evidence that export
-  succeeded; connection testing and delivery diagnostics remain separate work.
+  succeeded. The explicit empty-request connection probe does not prove telemetry
+  delivery; cumulative export diagnostics are reported separately.
   Existing private OTLP headers, compression, timeout, and TLS file settings
   are preserved across UI saves but are never returned over the Settings IPC.
 - Continuation checks: 10 menu-bar tests, 16 IPC tests, and 18 package tests passed.

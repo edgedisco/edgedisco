@@ -171,6 +171,21 @@ pub struct SettingsManager {
 }
 
 impl SettingsManager {
+    /// Build a probe-only exporter from saved settings, including private transport.
+    /// This does not persist settings or enable the running export worker.
+    pub fn connection_test_exporter(&self) -> Result<OtlpExporter, &'static str> {
+        let mut settings = self.active.lock().unwrap().settings.clone();
+        if settings.otlp_endpoint.is_none() {
+            return Err("no saved OTLP endpoint");
+        }
+        settings.export_enabled = Some(true);
+        settings
+            .apply(&self.base)
+            .ok()
+            .and_then(|args| args.otlp_exporter.map(|exporter| *exporter))
+            .ok_or("saved OTLP configuration is invalid")
+    }
+
     pub fn new(
         path: Option<PathBuf>,
         base: DaemonArgs,

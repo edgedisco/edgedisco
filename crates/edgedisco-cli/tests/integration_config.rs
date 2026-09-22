@@ -60,6 +60,10 @@ fn ui_settings_preserve_private_otlp_transport_and_disable_live_export() {
         .update(snapshot["revision"].as_str().unwrap(), settings.clone())
         .unwrap();
     assert!(rx.borrow().otlp_exporter.is_none());
+    assert!(
+        manager.connection_test_exporter().is_ok(),
+        "saved endpoint can be probed while export is disabled"
+    );
     assert!(std::fs::read_to_string(&path).unwrap().contains(secret));
     settings.export_enabled = Some(true);
     manager

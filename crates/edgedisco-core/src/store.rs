@@ -9,6 +9,17 @@ use std::path::Path;
 use thiserror::Error;
 
 pub const DATABASE_VERSION: u32 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ExportDiagnostics {
+    pub queued: i64,
+    pub delivered_total: i64,
+    pub retried_total: i64,
+    pub failed_total: i64,
+    pub dropped_total: i64,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+}
 const OTLP_MAX_PENDING: i64 = 5_000;
 const OTLP_MAX_PENDING_BYTES: i64 = 16 * 1024 * 1024;
 
@@ -403,6 +414,29 @@ impl std::fmt::Debug for Store {
 }
 
 impl Store {
+    /// Read only bounded aggregate telemetry health, never payloads or endpoints.
+    pub fn export_diagnostics(&self) -> Result<ExportDiagnostics, StoreError> {
+        let conn = self.conn.lock();
+        let queued = conn.query_row(
+            "SELECT COUNT(*) FROM otlp_outbox WHERE status IN ('pending','retry','sending')",
+            [],
+            |row| row.get(0),
+        )?;
+        conn.query_row(
+            "SELECT delivered_events_total,retried_events_total,failed_events_total,dropped_events_total,last_success_at,last_failure_at FROM otlp_export_status WHERE id=1",
+            [],
+            |row| Ok(ExportDiagnostics {
+                queued,
+                delivered_total: row.get(0)?,
+                retried_total: row.get(1)?,
+                failed_total: row.get(2)?,
+                dropped_total: row.get(3)?,
+                last_success_at: row.get(4)?,
+                last_failure_at: row.get(5)?,
+            }),
+        ).map_err(Into::into)
+    }
+
     /// Open or create SQLite store at a given filesystem path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref();

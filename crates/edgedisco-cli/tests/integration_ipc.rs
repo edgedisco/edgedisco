@@ -133,6 +133,13 @@ async fn settings_ipc_applies_user_updates_but_denies_system_writes() {
         .await;
         assert_eq!(get["ok"], true);
         assert_eq!(get["result"]["writable"], !system);
+        let probe = request(
+            &socket,
+            json!({"protocol_version":1,"request_id":"probe","method":"otlp_test_connection"}),
+        )
+        .await;
+        assert_eq!(probe["ok"], false);
+        assert_eq!(probe["error"]["code"], "probe_unavailable");
         let update = request(&socket, json!({"protocol_version":1,"request_id":"set","method":"settings_set","payload":{"expected_revision":get["result"]["revision"],"settings":{"schema_version":1,"interval_seconds":77,"otlp_endpoint":null,"otlp_batch_size":100,"export_enabled":false}}})).await;
         assert_eq!(update["ok"], !system);
         assert_eq!(config_path.exists(), !system);
@@ -291,6 +298,18 @@ async fn real_socket_negotiates_projects_sanitized_state_and_triggers_scan() {
             "leaked {forbidden}: {serialized}"
         );
     }
+
+    let diagnostics = request(
+        &socket,
+        json!({"protocol_version": PROTOCOL_VERSION, "request_id":"e1", "method":"export_diagnostics"}),
+    )
+    .await;
+    assert_eq!(diagnostics["ok"], true);
+    assert_eq!(diagnostics["result"]["delivered_total"], 0);
+    assert_eq!(diagnostics["result"]["queued"], 0);
+    assert!(diagnostics["result"]
+        .as_object()
+        .is_some_and(|fields| fields.len() == 7));
 
     let scan = request(
         &socket,

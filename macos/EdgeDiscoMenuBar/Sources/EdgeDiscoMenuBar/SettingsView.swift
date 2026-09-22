@@ -4,6 +4,10 @@ import SwiftUI
 struct SettingsView: View {
     @State private var scope: InventoryScope = .user
     @State private var snapshot: SettingsSnapshot?
+    @State private var diagnostics: ExportDiagnostics?
+    @State private var diagnosticsMessage: String?
+    @State private var connectionTestMessage: String?
+    @State private var testingConnection = false
     @State private var interval = "60"
     @State private var endpoint = ""
     @State private var batchSize = "100"
@@ -11,14 +15,14 @@ struct SettingsView: View {
     @State private var message: String?
     @State private var busy = false
 
-    private var canApply: Bool { snapshot?.writable == true && !busy }
+    private var canApply: Bool { snapshot?.writable == true && !busy && !testingConnection }
 
     var body: some View {
         Form {
             Picker("Scope", selection: $scope) {
                 ForEach(InventoryScope.allCases) { Text($0.rawValue).tag($0) }
             }
-            .onChange(of: scope) { _ in snapshot = nil; Task { await load() } }
+            .onChange(of: scope) { _ in snapshot = nil; diagnostics = nil; connectionTestMessage = nil; Task { await load() } }
 
             if snapshot == nil {
                 Text(message ?? "Loading settings…")
@@ -44,8 +48,31 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let message { Text(message).foregroundStyle(.secondary) }
+                Section("Export diagnostics") {
+                    if let diagnostics {
+                        Text("Queued: \(diagnostics.queued) · Delivered: \(diagnostics.deliveredTotal) · Retried: \(diagnostics.retriedTotal)")
+                        Text("Failed: \(diagnostics.failedTotal) · Dropped: \(diagnostics.droppedTotal)")
+                        Text("Last delivery: \(diagnostics.lastSuccessAt ?? "None recorded")")
+                        Text("Last failure: \(diagnostics.lastFailureAt ?? "None recorded")")
+                    } else {
+                        Text(diagnosticsMessage ?? "Loading export diagnostics…")
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 HStack {
-                    Button("Reload") { Task { await load() } }.disabled(busy)
+                    Button(testingConnection ? "Testing…" : "Test saved OTLP connection") {
+                        Task { await testConnection() }
+                    }
+                    .disabled(busy || testingConnection || snapshot?.settings.otlpEndpoint == nil)
+                    Text("Sends an empty OTLP request; does not deliver inventory data.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let connectionTestMessage {
+                    Text(connectionTestMessage).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Reload") { Task { await load() } }.disabled(busy || testingConnection)
                     Spacer()
                     Button(busy ? "Applying…" : "Apply") { Task { await apply() } }
                         .disabled(!canApply)
@@ -62,8 +89,23 @@ struct SettingsView: View {
         busy = true
         defer { busy = false }
         let path = selected.socketPath
-        let result = await EdgeDiscoClient(socketPath: path).settings()
+        let client = EdgeDiscoClient(socketPath: path)
+        async let settingsResult = client.settings()
+        async let diagnosticsResult = client.exportDiagnostics()
+        let result = await settingsResult
+        let exportResult = await diagnosticsResult
         guard scope == selected else { return }
+        switch exportResult {
+        case let .connected(value):
+            diagnostics = value
+            diagnosticsMessage = nil
+        case .daemonNotRunning:
+            diagnostics = nil
+            diagnosticsMessage = "The selected daemon is not running."
+        case let .protocolError(error):
+            diagnostics = nil
+            diagnosticsMessage = error
+        }
         switch result {
         case let .connected(value):
             snapshot = value
@@ -107,6 +149,30 @@ struct SettingsView: View {
             message = "The daemon stopped before settings could be saved."
         case let .protocolError(error):
             message = error
+        }
+    }
+
+    private func testConnection() async {
+        guard snapshot?.settings.otlpEndpoint != nil else { return }
+        let selected = scope
+        testingConnection = true
+        connectionTestMessage = nil
+        defer { testingConnection = false }
+        let result = await EdgeDiscoClient(socketPath: selected.socketPath).testOTLPConnection()
+        guard scope == selected else { return }
+        switch result {
+        case let .connected(value):
+            if value.accepted {
+                connectionTestMessage = "Collector accepted the empty probe. No inventory data was delivered."
+            } else if value.status == "http_rejected", let code = value.httpStatus {
+                connectionTestMessage = "Collector rejected the empty probe (HTTP \(code)). No inventory data was delivered."
+            } else {
+                connectionTestMessage = "Connection test failed: \(value.status.replacingOccurrences(of: "_", with: " ")). No inventory data was delivered."
+            }
+        case .daemonNotRunning:
+            connectionTestMessage = "The selected daemon is not running."
+        case let .protocolError(error):
+            connectionTestMessage = error
         }
     }
 }

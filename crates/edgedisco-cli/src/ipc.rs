@@ -556,6 +556,41 @@ async fn process_request(
             Ok(result) => IpcResponse::ok(request.request_id, result),
             Err(message) => IpcResponse::error(Some(request.request_id), "store_error", message),
         },
+        "export_diagnostics" => match store.export_diagnostics() {
+            Ok(result) => IpcResponse::ok(request.request_id, json!(result)),
+            Err(_) => IpcResponse::error(
+                Some(request.request_id),
+                "store_error",
+                "export diagnostics are unavailable",
+            ),
+        },
+        "otlp_test_connection" => {
+            let Some(settings) = settings else {
+                return IpcResponse::error(
+                    Some(request.request_id),
+                    "settings_unavailable",
+                    "settings are unavailable",
+                );
+            };
+            let exporter = match settings.connection_test_exporter() {
+                Ok(exporter) => exporter,
+                Err(message) => {
+                    return IpcResponse::error(
+                        Some(request.request_id),
+                        "probe_unavailable",
+                        message,
+                    )
+                }
+            };
+            let result = timeout(Duration::from_secs(8), exporter.test_connection()).await;
+            match result {
+                Ok(result) => IpcResponse::ok(request.request_id, json!(result)),
+                Err(_) => IpcResponse::ok(
+                    request.request_id,
+                    json!({"accepted": false, "status": "timeout", "http_status": null}),
+                ),
+            }
+        }
         "scan" => {
             let (reply, result) = oneshot::channel();
             match timeout(limits.write_timeout, scan_tx.send(ScanCommand { reply })).await {

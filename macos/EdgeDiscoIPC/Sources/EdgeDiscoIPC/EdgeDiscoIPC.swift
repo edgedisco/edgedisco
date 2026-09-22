@@ -53,6 +53,38 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public let writable: Bool
 }
 
+public struct ExportDiagnostics: Codable, Equatable, Sendable {
+    public let queued: Int64
+    public let deliveredTotal: Int64
+    public let retriedTotal: Int64
+    public let failedTotal: Int64
+    public let droppedTotal: Int64
+    public let lastSuccessAt: String?
+    public let lastFailureAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case queued
+        case deliveredTotal = "delivered_total"
+        case retriedTotal = "retried_total"
+        case failedTotal = "failed_total"
+        case droppedTotal = "dropped_total"
+        case lastSuccessAt = "last_success_at"
+        case lastFailureAt = "last_failure_at"
+    }
+}
+
+public struct ConnectionTestResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let status: String
+    public let httpStatus: UInt16?
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case status
+        case httpStatus = "http_status"
+    }
+}
+
 public struct SettingsUpdateRequest: Codable, Equatable, Sendable {
     public let expectedRevision: String
     public let settings: DaemonSettings

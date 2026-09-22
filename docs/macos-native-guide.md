@@ -105,6 +105,11 @@ Create `/Library/Application Support/EdgeDisco/config/daemon.json` as
 ```
 
 Fields other than `schema_version` are optional. A missing file uses CLI defaults.
+The native Settings window shows read-only export counters for each available
+daemon scope. Its **Test saved OTLP connection** button sends an empty OTLP Logs
+request using the saved endpoint and private transport settings. It does not
+send inventory records or change queued/delivered counts. Apply endpoint edits
+before testing; an accepted probe is not proof of telemetry delivery.
 The OTLP header string uses comma-separated `key=value` entries with percent-encoded values.
 Header names are case-insensitive; duplicate, transport-owned, and malformed headers are rejected.
 Keep the configuration file at mode `0600` when it contains headers. The CA and client certificate
