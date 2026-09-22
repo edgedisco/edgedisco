@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/edgedisco-core",
     "crates/edgedisco-sensor",
+    "crates/edgedisco-cli",
 ]
 
 [workspace.package]
