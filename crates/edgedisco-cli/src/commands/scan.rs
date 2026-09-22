@@ -6,7 +6,8 @@ use crate::util::{
 use edgedisco_core::models::{Asset, Device, DeviceReport, PrivacyFlags, ScanReport};
 use edgedisco_core::store::Store;
 use edgedisco_sensor::{
-    scan_available_containers, scan_host_processes, scan_installed_clis, scan_processes,
+    scan_available_containers, scan_host_processes, scan_installed_apps, scan_installed_clis,
+    scan_processes,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -25,6 +26,7 @@ pub fn combine_discovery_assets(host: Vec<Asset>, containers: Vec<Asset>) -> Vec
 pub fn generate_scan_report() -> Result<ScanReport, Box<dyn std::error::Error>> {
     let observations = scan_host_processes()?;
     let host = combine_discovery_assets(scan_processes(&observations), scan_installed_clis());
+    let host = combine_discovery_assets(host, scan_installed_apps());
     let mut assets = combine_discovery_assets(host, scan_available_containers());
     for asset in &mut assets {
         asset.present = None;

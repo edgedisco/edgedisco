@@ -6,10 +6,10 @@ One SwiftUI application will provide a compact menu-bar summary, a searchable
 inventory window, Settings, and diagnostics. The native collector must first regain
 the Python inventory coverage that makes installed but idle tools visible.
 
-Current evidence: Rust collects processes and containers; Python also inventories
-installed CLIs, apps, editor extensions, and MCP configuration. The packaged user
-collector writes a separate database that the system-first UI cannot read through
-IPC. Configuration currently supports JSON schema 1 and requires service restart.
+Current evidence: Rust collects processes, containers, and installed CLIs; Python
+also inventories apps, editor extensions, and MCP configuration. User and system
+daemons expose separate inventory scopes. User settings support live updates;
+system settings still require administrator-managed configuration and restart.
 
 ## 1. Discovery parity
 
@@ -90,7 +90,15 @@ IPC. Configuration currently supports JSON schema 1 and requires service restart
   with search, state filters, versions, evidence types, and last-seen timestamps.
   Detection refresh failures retain an explicit stale-data warning. The popover
   labels observation counts as Last scan findings.
-- Remaining: static app/extension/MCP collectors, combined product counts,
+- Added per-scope Products and Evidence views. Products combine installation and
+  runtime findings only for exact canonical catalog identities; unknown findings
+  remain separate. The evidence view retains every record. This is not yet a
+  cross-scope product summary.
+- Added a bounded macOS app-bundle slice: direct `.app` names in `/Applications`
+  and the user's Applications folder are matched to exact catalog names/aliases.
+  Symlinks and nested folders are skipped; bundle metadata and versions are not
+  read yet. This is narrower than Python's installed-app inventory.
+- Remaining: richer app metadata, editor-extension/MCP collectors, cross-scope product counts,
   interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.

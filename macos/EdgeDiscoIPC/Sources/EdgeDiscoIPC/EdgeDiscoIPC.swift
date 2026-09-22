@@ -167,6 +167,7 @@ public struct DetectionsResult: Codable, Equatable, Sendable {
 
 public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     public let id: String
+    public let productID: String?
     public let kind: String
     public let name: String
     public let vendor: String
@@ -177,6 +178,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: String = UUID().uuidString,
+        productID: String? = nil,
         kind: String,
         name: String,
         vendor: String,
@@ -186,6 +188,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
         lastSeen: String?
     ) {
         self.id = id
+        self.productID = productID
         self.kind = kind
         self.name = name
         self.vendor = vendor
@@ -197,6 +200,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case productID = "product_id"
         case kind
         case name
         case vendor
@@ -209,6 +213,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        productID = try values.decodeIfPresent(String.self, forKey: .productID)
         kind = try values.decode(String.self, forKey: .kind)
         name = try values.decode(String.self, forKey: .name)
         vendor = try values.decode(String.self, forKey: .vendor)
@@ -219,7 +224,8 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind
+        lhs.productID == rhs.productID
+            && lhs.kind == rhs.kind
             && lhs.name == rhs.name
             && lhs.vendor == rhs.vendor
             && lhs.version == rhs.version

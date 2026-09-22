@@ -59,8 +59,13 @@ Previously loaded records are explicitly marked potentially stale if refresh fai
 Existing installations need the updated package to replace the scheduled user
 collector with the persistent daemon. Before that upgrade, My Session can report
 unavailable even while This Mac works. Closing the inventory window keeps the
-menu-bar app running. Settings and live configuration updates remain planned;
-the instructions below configure the system daemon.
+menu-bar app running. The inventory window offers Products (catalog-matched
+findings grouped within the selected scope) and Evidence (individual records).
+The Settings window can update My Session's scan interval and basic OTLP options
+without restarting. This Mac settings remain read-only there; the instructions
+below configure the system daemon.
+Native scans also include catalog-matched app bundles directly in `/Applications`
+and `~/Applications`; this first app slice does not read bundle versions.
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 

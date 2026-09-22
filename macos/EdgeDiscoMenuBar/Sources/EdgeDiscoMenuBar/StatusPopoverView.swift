@@ -142,13 +142,45 @@ struct DetectionsListView: View {
     @ObservedObject var viewModel: StatusViewModel
     @State private var search = ""
     @State private var filter = "All"
-    private var visible: [SanitizedDetection] {
+    @State private var presentation = "Products"
+
+    private var visibleEvidence: [SanitizedDetection] {
         viewModel.detections.filter {
             (search.isEmpty || "\($0.name) \($0.vendor) \($0.kind)".localizedCaseInsensitiveContains(search))
             && (filter == "All" || (filter == "Running" && $0.running)
                 || (filter == "Installed" && $0.kind == "application" && $0.present != false)
                 || (filter == "Previously seen" && $0.present == false))
         }
+    }
+
+    private var visibleProducts: [InventoryProduct] {
+        InventoryProduct.group(viewModel.detections).filter {
+            $0.matches(search)
+                && (filter == "All" || (filter == "Running" && $0.running)
+                    || (filter == "Installed" && $0.installed)
+                    || (filter == "Previously seen" && $0.previouslySeen))
+        }
+    }
+
+    private var isEmpty: Bool {
+        presentation == "Products" ? visibleProducts.isEmpty : visibleEvidence.isEmpty
+    }
+
+    private func evidenceRow(_ detection: SanitizedDetection) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(detection.name).font(.headline)
+                Spacer()
+                Text(detection.present == false ? "Previously seen" : detection.runningLabel)
+                    .font(.caption)
+                    .accessibilityLabel("\(detection.name): \(detection.runningLabel)")
+            }
+            Text([detection.vendor, detection.version].compactMap { $0 }.joined(separator: " · "))
+                .font(.subheadline).foregroundStyle(.secondary)
+            Text("Evidence: \(detection.kind) • Last seen: \(detection.lastSeen ?? "Unknown")")
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+        .padding(.vertical, 3)
     }
 
     var body: some View {
@@ -173,13 +205,19 @@ struct DetectionsListView: View {
             Picker("State", selection: $filter) {
                 ForEach(["All", "Installed", "Running", "Previously seen"], id: \.self) { Text($0) }
             }.pickerStyle(.segmented)
-            Text("\(visible.count) evidence records • A tool may have installation and process records.")
+            Picker("View", selection: $presentation) {
+                Text("Products").tag("Products")
+                Text("Evidence").tag("Evidence")
+            }.pickerStyle(.segmented)
+            Text(presentation == "Products"
+                 ? "\(visibleProducts.count) grouped entries from \(visibleProducts.reduce(0) { $0 + $1.evidence.count }) findings • Only catalog-matched tools are combined."
+                 : "\(visibleEvidence.count) evidence records • Installation and process findings stay separate.")
                 .font(.caption).foregroundStyle(.secondary)
 
             if viewModel.isLoadingDetections, viewModel.detections.isEmpty {
                 ProgressView("Loading detections…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if visible.isEmpty {
+            } else if isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.largeTitle)
@@ -190,32 +228,32 @@ struct DetectionsListView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(visible) { detection in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Text(detection.name)
-                                .font(.headline)
-                            Spacer()
-                            Text(detection.present == false ? "Previously seen" : detection.runningLabel)
-                                .font(.caption)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    detection.running ? Color.green.opacity(0.2) : Color.secondary.opacity(0.15),
-                                    in: Capsule()
-                                )
-                                .accessibilityLabel("\(detection.name): \(detection.runningLabel)")
+            } else if presentation == "Products" {
+                List(visibleProducts) { product in
+                    DisclosureGroup {
+                        ForEach(product.evidence) { detection in
+                            evidenceRow(detection)
                         }
-                        Text([detection.vendor, detection.version].compactMap { $0 }.joined(separator: " · "))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text("Type: \(detection.kind) • Last seen: \(detection.lastSeen ?? "Unknown")")
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(product.name).font(.headline)
+                                Spacer()
+                                Text(product.running ? "Running" : product.installed ? "Installed" : product.previouslySeen ? "Previously seen" : "Observed")
+                                    .font(.caption)
+                            }
+                            Text("\(product.vendor) • \(product.evidence.count) evidence \(product.evidence.count == 1 ? "record" : "records")")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            if let version = product.version {
+                                Text("Version \(version)").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    .padding(.vertical, 3)
                 }
                 .listStyle(.inset)
+            } else {
+                List(visibleEvidence) { detection in evidenceRow(detection) }
+                    .listStyle(.inset)
             }
         }
         .padding(16)

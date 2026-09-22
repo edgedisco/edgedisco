@@ -2,6 +2,12 @@ import XCTest
 @testable import EdgeDiscoIPC
 
 final class WireTypesTests: XCTestCase {
+    func testDetectionDecodesOptionalCatalogProductIdentity() throws {
+        let data = Data(#"{"id":"finding","product_id":"catalog-key","kind":"process","name":"Agent","vendor":"Example","version":null,"running":true,"present":true,"last_seen":null}"#.utf8)
+        let detection = try JSONDecoder().decode(SanitizedDetection.self, from: data)
+        XCTAssertEqual(detection.productID, "catalog-key")
+    }
+
     func testSettingsUpdateEncodesRevisionAndAllEditableFields() async throws {
         let settings = DaemonSettings(intervalSeconds: 90, otlpEndpoint: "https://example.test/v1/logs", otlpBatchSize: 42, exportEnabled: true)
         let request = IpcRequest(protocolVersion: 1, requestID: "set-1", method: "settings_set", payload: SettingsUpdateRequest(expectedRevision: "rev-1", settings: settings))

@@ -272,6 +272,10 @@ async fn real_socket_negotiates_projects_sanitized_state_and_triggers_scan() {
         .collect();
     assert_eq!(ids.len(), 2, "identical display rows need distinct IDs");
     assert!(ids.iter().all(|id| id.len() == 64));
+    assert!(rows
+        .iter()
+        .all(|row| row["product_id"].as_str().is_some_and(|id| id.len() == 64)));
+    assert_eq!(rows[0]["product_id"], rows[1]["product_id"]);
     let serialized = serde_json::to_string(&detections).unwrap();
     for forbidden in [
         "fingerprint",

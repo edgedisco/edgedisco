@@ -1,4 +1,5 @@
 use crate::config::{Settings, SettingsManager};
+use edgedisco_core::catalog::{catalog, APPLICATION_SIGNATURES};
 use edgedisco_core::store::Store;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -254,6 +255,8 @@ impl IpcResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SanitizedDetection {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<String>,
     pub kind: String,
     pub name: String,
     pub vendor: String,
@@ -615,6 +618,7 @@ fn detections_result(store: &Store) -> Result<Value, String> {
                 "detection:{}",
                 asset.fingerprint
             )),
+            product_id: catalog_product_id(&asset.name, &asset.vendor),
             kind: asset.kind,
             name: asset.name,
             vendor: asset.vendor,
@@ -625,6 +629,22 @@ fn detections_result(store: &Store) -> Result<Value, String> {
         })
         .collect::<Vec<_>>();
     Ok(json!({"detections": detections}))
+}
+
+fn catalog_product_id(name: &str, vendor: &str) -> Option<String> {
+    // Only canonical catalog identities can combine evidence rows. Generic or
+    // unknown names may describe unrelated tools and remain separate findings.
+    if name == "MCP Server" || vendor == "Unknown" {
+        return None;
+    }
+    let known = catalog()
+        .agents
+        .iter()
+        .any(|agent| agent.name == name && agent.vendor == vendor)
+        || APPLICATION_SIGNATURES
+            .iter()
+            .any(|app| app.name == name && app.vendor == vendor);
+    known.then(|| edgedisco_core::redaction::sha256_digest(format!("product:{vendor}:{name}")))
 }
 
 fn prepare_socket_path(config: &IpcConfig) -> Result<(), IpcError> {
@@ -752,4 +772,18 @@ pub fn default_user_socket_path() -> Result<PathBuf, IpcError> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| IpcError::InvalidConfig("HOME is required for user IPC mode".into()))?;
     Ok(Path::new(&home).join(".edgedisco").join("edgedisco.sock"))
+}
+
+#[cfg(test)]
+mod product_identity_tests {
+    use super::catalog_product_id;
+
+    #[test]
+    fn only_canonical_known_products_receive_group_identity() {
+        let cursor = catalog_product_id("Cursor", "Anysphere").expect("known app");
+        assert_eq!(cursor.len(), 64);
+        assert_eq!(catalog_product_id("Cursor", "Anysphere"), Some(cursor));
+        assert_eq!(catalog_product_id("Cursor", "Unrelated vendor"), None);
+        assert_eq!(catalog_product_id("MCP Server", "Unknown"), None);
+    }
 }
