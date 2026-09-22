@@ -26,14 +26,13 @@ environment may be activated, or its Python can be called explicitly:
 cd /path/to/edgedisco
 python3 --version  # must report 3.10 or newer
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[mcp]'
-edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
+.venv/bin/python -m pip install -e '.[mcp]'
+.venv/bin/edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
 ```
 
-Without activation, use `.venv/bin/python -m pip` for installation and `.venv/bin/edgedisco` to
-run the server. A project-name install such as `ai-asset-inventory[mcp]` works from any directory
-only when that package is available from the configured package index.
+Here `python3` is used only to create the project environment; installation and execution use that
+environment explicitly. A project-name install such as `ai-asset-inventory[mcp]` works from any
+directory only when that package is available from the configured package index.
 
 The Streamable HTTP endpoint is `http://127.0.0.1:8081/mcp`. The service is stateless and returns
 JSON responses. `--audit-log` selects a JSON Lines audit file; otherwise EdgeDisco writes

@@ -4,6 +4,10 @@ set -euo pipefail
 INSTALL_ROOT="${EDGEDISCO_HOME:-$HOME/.edgedisco}"
 DOMAIN="gui/$(id -u)"
 PURGE=false
+MANAGED_PYTHON="$INSTALL_ROOT/venv/bin/python"
+if [[ ! -x "$MANAGED_PYTHON" ]]; then
+  MANAGED_PYTHON="${PYTHON_BIN:-python3}"
+fi
 
 if [[ "${1:-}" == "--purge" ]]; then
   PURGE=true
@@ -12,7 +16,7 @@ fi
 launchctl bootout "$DOMAIN/com.edgedisco.agent" >/dev/null 2>&1 || true
 launchctl bootout "$DOMAIN/com.edgedisco.server" >/dev/null 2>&1 || true
 
-python3 - \
+"$MANAGED_PYTHON" - \
   "$HOME/Library/LaunchAgents/com.edgedisco.agent.plist" \
   "$HOME/Library/LaunchAgents/com.edgedisco.server.plist" \
   "$INSTALL_ROOT" \
@@ -78,7 +82,7 @@ PY
 if [[ "$PURGE" == true ]]; then
   read -r -p "Delete all EdgeDisco configuration, credentials, logs, and evidence? [y/N] " answer
   if [[ "$answer" =~ ^[Yy]$ ]]; then
-    python3 - "$INSTALL_ROOT" <<'PY'
+    "$MANAGED_PYTHON" - "$INSTALL_ROOT" <<'PY'
 from pathlib import Path
 import shutil, sys
 target = Path(sys.argv[1]).resolve()

@@ -6,18 +6,20 @@ Contributions that improve detection quality, privacy, portability, tests, or en
 
 ```bash
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
+.venv/bin/python -m pip install -e .
 make check
-edgedisco demo
+.venv/bin/edgedisco demo
 ```
 
-`make check` is the canonical validation command from a source checkout. After the editable install, `edgedisco` is on your PATH only while `.venv` is active; without activation use `.venv/bin/edgedisco`.
+The first command uses a system Python only to create the project environment. Every later Python
+command uses that environment explicitly. `make` automatically prefers `.venv/bin/python` when it
+exists; set `PYTHON=/path/to/python` to test a different interpreter.
 
-The command above installs the core package. To work on the optional integrations, run this from the repository root while the virtual environment is active:
+The command above installs the core package. To work on the optional integrations, run this from
+the repository root:
 
 ```bash
-python -m pip install -e '.[mcp,otlp]'
+.venv/bin/python -m pip install -e '.[mcp,otlp]'
 ```
 
 The `mcp` extra requires Python 3.10+; the core supports Python 3.9+.

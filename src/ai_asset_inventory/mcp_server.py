@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -45,8 +47,9 @@ def create_server(db_path: Path, audit_path: Path | None = None):
     except ImportError as exc:
         raise RuntimeError(
             "MCP support requires Python 3.10+ and the optional mcp dependency. "
-            "Managed installs include it; from a source checkout, run "
-            "python -m pip install -e '.[mcp]' from the repository root."
+            "Managed installs include it; to install it into this environment, run "
+            f"{shlex.quote(sys.executable)} -m pip install -e '.[mcp]' "
+            "from the repository root."
         ) from exc
 
     database = Database(db_path)

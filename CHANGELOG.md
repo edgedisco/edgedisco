@@ -23,6 +23,7 @@ All notable project changes are documented here.
 - Corrected effective stale-session filtering, VS Code's `servers` configuration schema, simulation labeling, and failed-call auditing.
 - Marked every MCP tool with read-only, non-destructive, closed-world protocol hints and added real MCP/OTLP dependency coverage in CI.
 - Added OTLP version state changes and distinct inventory-observation and server-receipt timestamps, plus an implementation-ready HTTP/protobuf exporter specification aligned with the reference `otel-stack` collector.
+- Made source-checkout commands, managed MCP checks, maintenance scripts, and Make targets consistently use their installation virtual environment after bootstrap.
 
 ## 0.4.0
 

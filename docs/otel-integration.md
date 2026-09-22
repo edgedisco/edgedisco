@@ -65,12 +65,14 @@ development environment and run the isolated verification script:
 ```sh
 cd /path/to/edgedisco
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[otlp]'
-python scripts/verify_otlp_export.py \
+.venv/bin/python -m pip install -e '.[otlp]'
+.venv/bin/python scripts/verify_otlp_export.py \
   --endpoint http://127.0.0.1:4318/v1/logs \
   --output-dir /tmp/edgedisco-otel-verification
 ```
+
+The system `python3` command only creates the project environment. Package installation and the
+verification script both use the interpreter from that environment.
 
 Use a fresh output directory on each run. The script creates its own database, invokes the real
 exporter, alternates plain and gzip requests, and queries Loki. It checks running and stopped

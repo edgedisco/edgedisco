@@ -140,7 +140,7 @@ selected Python version supports it. MCP is optional and is not installed as a s
 the following command runs a separate foreground Python process:
 
 ```bash
-python3 --version
+~/.edgedisco/venv/bin/python --version
 edgedisco mcp \
   --db ~/.edgedisco/data/inventory.db \
   --host 127.0.0.1 \
