@@ -10,6 +10,7 @@ final class TestUnixServer {
     private var listener: Int32
     private let responder: Responder
     private let holdOpen: TimeInterval
+    private let closeAfterResponse: Bool
     private let queue = DispatchQueue(label: "EdgeDiscoIPCTests.TestUnixServer")
     private let lock = NSLock()
     private let finished = DispatchSemaphore(value: 0)
@@ -18,10 +19,11 @@ final class TestUnixServer {
     private(set) var receivedFrame = Data()
     private(set) var clientClosedAfterResponse = false
 
-    init(holdOpen: TimeInterval = 0, responder: @escaping Responder) throws {
+    init(holdOpen: TimeInterval = 0, closeAfterResponse: Bool = false, responder: @escaping Responder) throws {
         path = "/tmp/edgedisco-ipc-\(UUID().uuidString).sock"
         self.responder = responder
         self.holdOpen = holdOpen
+        self.closeAfterResponse = closeAfterResponse
         listener = socket(AF_UNIX, SOCK_STREAM, 0)
         guard listener >= 0 else { throw POSIXError(.ENOTSOCK) }
 
@@ -107,6 +109,8 @@ final class TestUnixServer {
         } else if holdOpen > 0 {
             Thread.sleep(forTimeInterval: holdOpen)
         }
+
+        if closeAfterResponse { return }
 
         var timeout = timeval(tv_sec: 1, tv_usec: 0)
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))

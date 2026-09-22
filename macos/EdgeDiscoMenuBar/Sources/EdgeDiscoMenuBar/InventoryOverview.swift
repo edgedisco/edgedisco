@@ -158,9 +158,12 @@ struct InventoryOverviewView: View {
                     .disabled(model.isLoading)
             }
             HStack(spacing: 16) {
-                sourceSummary("My Session", state: model.user)
-                sourceSummary("This Mac", state: model.system)
+                sourceSummary("My Session", subtitle: "Your user daemon", state: model.user)
+                sourceSummary("This Mac", subtitle: "System daemon", state: model.system)
             }
+            Text("These are separate inventories; a tool may appear in both.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Picker("Scope", selection: $scopeFilter) {
                 ForEach(OverviewScopeFilter.allCases) { scope in
                     Text(scope.rawValue).tag(scope)
@@ -216,9 +219,10 @@ struct InventoryOverviewView: View {
         .task { await model.refresh() }
     }
 
-    private func sourceSummary(_ title: String, state: InventorySourceState) -> some View {
+    private func sourceSummary(_ title: String, subtitle: String, state: InventorySourceState) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline).fontWeight(.medium)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
             switch state {
             case .loading: Text("Loading…").foregroundStyle(.secondary)
             case let .available(rows): Text("\(rows.count) findings").foregroundStyle(.secondary)

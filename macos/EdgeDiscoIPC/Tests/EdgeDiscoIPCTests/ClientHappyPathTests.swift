@@ -114,4 +114,23 @@ final class ClientHappyPathTests: XCTestCase {
         let request = try JSONDecoder().decode(IpcRequest.self, from: server.snapshot().frame.dropLast())
         XCTAssertEqual(request.method, "detections")
     }
+
+    func testLargeDetectionsReplySurvivesDaemonClosingSocketImmediately() async throws {
+        let entries = (0..<160).map { index in
+            #"{"kind":"cli_tool","name":"Agent \#(index)","vendor":"Example","version":"1.2.3","running":false,"present":true,"last_seen":"2026-09-22T10:00:00Z","evidence":""#
+                + String(repeating: "x", count: 100) + #""}"#
+        }
+        let server = try TestUnixServer(closeAfterResponse: true) { request in
+            responseFrame(request: request, resultJSON: #"{"detections":["# + entries.joined(separator: ",") + "]}")
+        }
+
+        let result = await EdgeDiscoClient(socketPath: server.path).detections()
+
+        guard case let .success(detections) = result else {
+            return XCTFail("expected all detections, got \(result)")
+        }
+        XCTAssertEqual(detections.count, 160)
+        XCTAssertEqual(detections.last?.name, "Agent 159")
+        XCTAssertTrue(server.wait())
+    }
 }

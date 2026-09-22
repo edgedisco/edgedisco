@@ -63,12 +63,13 @@ final class StatusItemManager: NSObject {
         popover.performClose(nil)
         if inventoryWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+                contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false
             )
             window.title = "EdgeDisco Inventory"
             window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 700, height: 500)
             window.contentViewController = NSHostingController(rootView:
                 TabView {
                     InventoryOverviewView()
@@ -89,12 +90,13 @@ final class StatusItemManager: NSObject {
         popover.performClose(nil)
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 540, height: 410),
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 660),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false
             )
             window.title = "EdgeDisco Settings"
             window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 640, height: 480)
             window.contentViewController = NSHostingController(rootView: SettingsView())
             window.center()
             settingsWindow = window

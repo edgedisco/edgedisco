@@ -18,70 +18,140 @@ struct SettingsView: View {
     private var canApply: Bool { snapshot?.writable == true && !busy && !testingConnection }
 
     var body: some View {
-        Form {
-            Picker("Scope", selection: $scope) {
-                ForEach(InventoryScope.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .onChange(of: scope) { _ in snapshot = nil; diagnostics = nil; connectionTestMessage = nil; Task { await load() } }
-
-            if snapshot == nil {
-                Text(message ?? "Loading settings…")
-                    .foregroundStyle(.secondary)
-                Button("Retry") { Task { await load() } }
-                    .disabled(busy)
-            } else {
-                Text(scope == .user ? "Changes to My Session apply without restarting the daemon." : "This Mac settings are read-only here. An administrator can edit the system config and restart its daemon.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                TextField("Scan interval (seconds)", text: $interval)
-                    .disabled(!canApply)
-                Toggle("Export via OTLP", isOn: $enabled)
-                    .disabled(!canApply)
-                TextField("OTLP/HTTP logs endpoint", text: $endpoint)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!canApply)
-                TextField("Records per batch", text: $batchSize)
-                    .disabled(!canApply)
-
-                Text("Use HTTPS, or HTTP to a loopback endpoint. The endpoint is saved in your private EdgeDisco configuration.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let message { Text(message).foregroundStyle(.secondary) }
-                Section("Export diagnostics") {
-                    if let diagnostics {
-                        Text("Queued: \(diagnostics.queued) · Delivered: \(diagnostics.deliveredTotal) · Retried: \(diagnostics.retriedTotal)")
-                        Text("Failed: \(diagnostics.failedTotal) · Dropped: \(diagnostics.droppedTotal)")
-                        Text("Last delivery: \(diagnostics.lastSuccessAt ?? "None recorded")")
-                        Text("Last failure: \(diagnostics.lastFailureAt ?? "None recorded")")
-                    } else {
-                        Text(diagnosticsMessage ?? "Loading export diagnostics…")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                HStack {
-                    Button(testingConnection ? "Testing…" : "Test saved OTLP connection") {
-                        Task { await testConnection() }
-                    }
-                    .disabled(busy || testingConnection || snapshot?.settings.otlpEndpoint == nil)
-                    Text("Sends an empty OTLP request; does not deliver inventory data.")
-                        .font(.caption)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Choose which daemon's settings to view. My Session is editable; This Mac is managed by an administrator.")
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Picker("Scope", selection: $scope) {
+                        ForEach(InventoryScope.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: scope) { _ in
+                        snapshot = nil
+                        diagnostics = nil
+                        connectionTestMessage = nil
+                        Task { await load() }
+                    }
+
+                    if snapshot == nil {
+                        GroupBox("Connection") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(message ?? "Loading settings…")
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Retry") { Task { await load() } }
+                                    .disabled(busy)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        }
+                    } else {
+                        GroupBox("Scanning and export") {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(scope == .user
+                                    ? "Changes to My Session apply without restarting the daemon."
+                                    : "This Mac settings are read-only. An administrator can edit the system configuration and restart its daemon.")
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                HStack(alignment: .top, spacing: 20) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Scan interval (seconds)")
+                                        TextField("Seconds", text: $interval)
+                                            .disabled(!canApply)
+                                    }
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Records per batch")
+                                        TextField("Records", text: $batchSize)
+                                            .disabled(!canApply)
+                                    }
+                                }
+                                Toggle("Export via OTLP", isOn: $enabled)
+                                    .disabled(!canApply)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("OTLP/HTTP logs endpoint")
+                                    TextField("https://collector.example/v1/logs", text: $endpoint)
+                                        .disabled(!canApply)
+                                    Text("Use HTTPS, or HTTP to a loopback endpoint. Saved in your private EdgeDisco configuration.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        }
+
+                        GroupBox("Export activity") {
+                            VStack(alignment: .leading, spacing: 14) {
+                                if let diagnostics {
+                                    HStack(spacing: 24) {
+                                        metric("Queued", value: diagnostics.queued)
+                                        metric("Delivered", value: diagnostics.deliveredTotal)
+                                        metric("Retried", value: diagnostics.retriedTotal)
+                                        metric("Failed", value: diagnostics.failedTotal)
+                                        metric("Dropped", value: diagnostics.droppedTotal)
+                                    }
+                                    Divider()
+                                    Text("Last delivery: \(diagnostics.lastSuccessAt ?? "None recorded")")
+                                    Text("Last failure: \(diagnostics.lastFailureAt ?? "None recorded")")
+                                } else {
+                                    Text(diagnosticsMessage ?? "Loading export activity…")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button(testingConnection ? "Testing…" : "Test saved OTLP connection") {
+                                    Task { await testConnection() }
+                                }
+                                .disabled(busy || testingConnection || snapshot?.settings.otlpEndpoint == nil)
+                                Text("Sends an empty OTLP request. No inventory data is delivered.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let connectionTestMessage {
+                                    Text(connectionTestMessage)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        }
+                    }
                 }
-                if let connectionTestMessage {
-                    Text(connectionTestMessage).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Reload") { Task { await load() } }.disabled(busy || testingConnection)
-                    Spacer()
-                    Button(busy ? "Applying…" : "Apply") { Task { await apply() } }
-                        .disabled(!canApply)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(24)
             }
+            Divider()
+            HStack {
+                if let message, snapshot != nil {
+                    Text(message)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer()
+                }
+                Button("Reload") { Task { await load() } }
+                    .disabled(busy || testingConnection)
+                Button(busy ? "Applying…" : "Apply") { Task { await apply() } }
+                    .disabled(!canApply)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
-        .padding(20)
-        .frame(minWidth: 500, minHeight: 350)
+        .frame(minWidth: 640, minHeight: 480)
         .task { await load() }
+    }
+
+    private func metric(_ title: String, value: Int64) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value.formatted()).font(.title3.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func load() async {
@@ -116,7 +186,7 @@ struct SettingsView: View {
             message = nil
         case .daemonNotRunning:
             snapshot = nil
-            message = "The (selected.rawValue) daemon is not running."
+            message = "The \(selected.rawValue) daemon is not running."
         case let .protocolError(error):
             snapshot = nil
             message = error

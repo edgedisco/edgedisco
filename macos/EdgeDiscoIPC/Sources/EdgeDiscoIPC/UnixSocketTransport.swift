@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import Network
 
 public enum ConnectionState<Value: Equatable & Sendable>: Equatable, Sendable {
     case connected(Value)
@@ -173,119 +172,119 @@ public struct EdgeDiscoClient: Sendable {
         }
     }
 
-    private final class ExchangeState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var isResumed = false
-        func markResumed() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            let old = isResumed
-            isResumed = true
-            return !old
+    private func exchange(frame: Data, at path: String, timeout requestTimeout: TimeInterval) async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result {
+                    try Self.exchangeBlocking(frame: frame, at: path, timeout: requestTimeout)
+                })
+            }
         }
     }
 
-    private func exchange(frame: Data, at path: String, timeout requestTimeout: TimeInterval) async throws -> Data {
-        let address = sockaddr_un()
-        guard path.utf8.count < MemoryLayout.size(ofValue: address.sun_path) else {
+    private static func exchangeBlocking(frame: Data, at path: String, timeout: TimeInterval) throws -> Data {
+        var address = sockaddr_un()
+        let pathBytes = Array(path.utf8) + [0]
+        guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
             throw TransportFailure.message("Unix socket path is too long")
         }
-        let connection = NWConnection(to: .unix(path: path), using: .tcp)
-        let state = ExchangeState()
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(requestTimeout * 1_000_000_000))
-                if state.markResumed() {
-                    connection.cancel()
-                    continuation.resume(throwing: TransportFailure.message("request timed out"))
-                }
-            }
-
-            connection.stateUpdateHandler = { nwState in
-                switch nwState {
-                case .ready:
-                    connection.send(content: frame, completion: .contentProcessed({ error in
-                        if let error = error {
-                            if state.markResumed() {
-                                timeoutTask.cancel()
-                                connection.cancel()
-                                continuation.resume(throwing: TransportFailure.message("could not write request: \(error.localizedDescription)"))
-                            }
-                            return
-                        }
-
-                        var response = Data()
-
-                        func receiveNext() {
-                            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
-                                if let data = data {
-                                    response.append(data)
-
-                                    if response.count > Self.maximumResponseBytes {
-                                        if state.markResumed() {
-                                            timeoutTask.cancel()
-                                            connection.cancel()
-                                            continuation.resume(throwing: TransportFailure.message("response exceeds \(Self.maximumResponseBytes)-byte limit"))
-                                        }
-                                        return
-                                    }
-
-                                    if let newlineIndex = response.firstIndex(of: 0x0A) {
-                                        if state.markResumed() {
-                                            timeoutTask.cancel()
-                                            connection.cancel()
-                                            continuation.resume(returning: response[..<newlineIndex])
-                                        }
-                                        return
-                                    }
-                                }
-
-                                if let error = error {
-                                    if state.markResumed() {
-                                        timeoutTask.cancel()
-                                        connection.cancel()
-                                        continuation.resume(throwing: TransportFailure.message("could not read response: \(error.localizedDescription)"))
-                                    }
-                                    return
-                                }
-
-                                if isComplete {
-                                    if state.markResumed() {
-                                        timeoutTask.cancel()
-                                        connection.cancel()
-                                        continuation.resume(throwing: TransportFailure.message("response ended before newline terminator"))
-                                    }
-                                    return
-                                }
-
-                                receiveNext()
-                            }
-                        }
-
-                        receiveNext()
-                    }))
-                case .failed(let error), .waiting(let error):
-                    if state.markResumed() {
-                        timeoutTask.cancel()
-                        connection.cancel()
-                        if error == NWError.posix(.ENOENT) || error == NWError.posix(.ECONNREFUSED) {
-                            continuation.resume(throwing: TransportFailure.daemonNotRunning)
-                        } else {
-                            continuation.resume(throwing: TransportFailure.message("could not connect to daemon: \(error.localizedDescription)"))
-                        }
-                    }
-                case .cancelled:
-                    if state.markResumed() {
-                        timeoutTask.cancel()
-                        continuation.resume(throwing: TransportFailure.message("connection cancelled"))
-                    }
-                default:
-                    break
-                }
-            }
-
-            connection.start(queue: .global())
+        let socket = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard socket >= 0 else { throw TransportFailure.message("could not create Unix socket") }
+        defer { Darwin.close(socket) }
+        var noSigPipe: Int32 = 1
+        _ = setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout.size(ofValue: noSigPipe)))
+        let flags = fcntl(socket, F_GETFL)
+        guard flags >= 0, fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw TransportFailure.message("could not configure Unix socket")
         }
+
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(socket, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if connected != 0 {
+            let code = errno
+            if code == EINPROGRESS {
+                try waitFor(socket, events: Int16(POLLOUT), deadline: deadline)
+                var socketError: Int32 = 0
+                var length = socklen_t(MemoryLayout.size(ofValue: socketError))
+                guard getsockopt(socket, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 else {
+                    throw TransportFailure.message("could not check daemon connection")
+                }
+                if socketError != 0 { try throwConnectionError(socketError) }
+            } else {
+                try throwConnectionError(code)
+            }
+        }
+
+        try frame.withUnsafeBytes { bytes in
+            guard let start = bytes.baseAddress else { return }
+            var sent = 0
+            while sent < bytes.count {
+                guard ProcessInfo.processInfo.systemUptime < deadline else {
+                    throw TransportFailure.message("request timed out")
+                }
+                let count = Darwin.send(socket, start.advanced(by: sent), bytes.count - sent, 0)
+                if count > 0 { sent += count; continue }
+                if count < 0 && errno == EINTR { continue }
+                if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    try waitFor(socket, events: Int16(POLLOUT), deadline: deadline)
+                    continue
+                }
+                throw TransportFailure.message("could not write request: \(posixMessage(errno))")
+            }
+        }
+
+        var response = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw TransportFailure.message("request timed out")
+            }
+            let count = buffer.withUnsafeMutableBytes { Darwin.recv(socket, $0.baseAddress, $0.count, 0) }
+            if count > 0 {
+                response.append(contentsOf: buffer[..<count])
+                guard response.count <= maximumResponseBytes else {
+                    throw TransportFailure.message("response exceeds \(maximumResponseBytes)-byte limit")
+                }
+                if let newline = response.firstIndex(of: 0x0A) { return response[..<newline] }
+                continue
+            }
+            if count == 0 { throw TransportFailure.message("response ended before newline terminator") }
+            if errno == EINTR { continue }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                try waitFor(socket, events: Int16(POLLIN), deadline: deadline)
+                continue
+            }
+            throw TransportFailure.message("could not read response: \(posixMessage(errno))")
+        }
+    }
+
+    private static func waitFor(_ socket: Int32, events: Int16, deadline: TimeInterval) throws {
+        var descriptor = pollfd(fd: socket, events: events, revents: 0)
+        while true {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { throw TransportFailure.message("request timed out") }
+            let milliseconds = Int32(min(Double(Int32.max), max(1, remaining * 1000)))
+            let result = Darwin.poll(&descriptor, 1, milliseconds)
+            if result > 0 { return }
+            if result == 0 { throw TransportFailure.message("request timed out") }
+            if errno != EINTR { throw TransportFailure.message("socket wait failed: \(posixMessage(errno))") }
+        }
+    }
+
+    private static func throwConnectionError(_ code: Int32) throws -> Never {
+        if code == ENOENT || code == ECONNREFUSED { throw TransportFailure.daemonNotRunning }
+        throw TransportFailure.message("could not connect to daemon: \(posixMessage(code))")
+    }
+
+    private static func posixMessage(_ code: Int32) -> String {
+        POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO).localizedDescription
     }
 }
