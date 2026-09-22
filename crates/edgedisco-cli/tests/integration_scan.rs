@@ -49,6 +49,64 @@ fn test_scan_combines_host_and_container_assets_without_duplicates() {
 }
 
 #[test]
+fn installed_cli_remains_present_after_its_process_stops() {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().canonicalize().unwrap().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(bin.join("opencode"), b"fixture").unwrap();
+    let installed = edgedisco_sensor::installed::scan_installed_clis_in(
+        std::slice::from_ref(&bin),
+        std::slice::from_ref(&bin),
+    );
+    assert_eq!(installed.len(), 1);
+    let process = Asset::new(
+        edgedisco_core::redaction::sha256_digest("running opencode"),
+        "process",
+        "OpenCode",
+        "OpenCode",
+        true,
+    );
+    let mut report = ScanReport {
+        schema_version: Some(2),
+        scan_id: "with-process".into(),
+        observed_at: "2026-09-22T00:00:00Z".into(),
+        device: DeviceReport {
+            hostname: "fixture".into(),
+            os: "Darwin".into(),
+            os_version: None,
+            machine: None,
+            agent_version: None,
+        },
+        assets: combine_discovery_assets(vec![process], installed.clone()),
+        privacy: PrivacyFlags::default(),
+    };
+    // Native reports omit storage-managed presence; ingestion establishes it.
+    for asset in &mut report.assets {
+        asset.present = None;
+    }
+    validate_report(&report).unwrap();
+    let db = temp.path().join("inventory.db");
+    persist_scan_report(&db, &report).unwrap();
+    report.scan_id = "idle-installation".into();
+    report.observed_at = "2026-09-22T00:01:00Z".into();
+    report.assets = installed;
+    for asset in &mut report.assets {
+        asset.present = None;
+    }
+    persist_scan_report(&db, &report).unwrap();
+    let rows = Store::open(&db)
+        .unwrap()
+        .list_assets(None, None, false, 10)
+        .unwrap();
+    let app = rows.iter().find(|a| a.kind == "application").unwrap();
+    assert_eq!(app.present, Some(true));
+    assert!(!app.running);
+    let process = rows.iter().find(|a| a.kind == "process").unwrap();
+    assert_eq!(process.present, Some(false));
+    assert!(!process.running);
+}
+
+#[test]
 fn test_scan_report_persists_container_assets() {
     let temp = tempfile::NamedTempFile::new().expect("temporary database");
     let asset = Asset::new(
