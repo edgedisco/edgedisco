@@ -1,4 +1,4 @@
-language: python
-test_command: .venv/bin/pytest -q && (cargo test --workspace 2>/dev/null || true)
-isolation:
-  venv_path: .venv
+# Rust is the active port. Factory cards must not run the legacy Python suite
+# unless their card explicitly names a Python compatibility or packaging gate.
+language: rust
+test_command: cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace

@@ -1,24 +1,37 @@
-.PHONY: test check build clean macos-pkg
+.PHONY: test check build test-rust check-rust build-rust test-python check-python build-python clean macos-pkg
 
+# Rust is the active implementation. The default targets must not pull the
+# legacy Python suite into every Rust iteration.
+test: test-rust
+check: check-rust
+build: build-rust
+
+test-rust:
+	cargo test --workspace
+
+check-rust: test-rust
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+build-rust: check-rust
+	cargo build --workspace --release
+
+# Legacy Python validation is explicit and remains available for compatibility
+# and for cards whose acceptance criteria still cover the Python port.
 # Prefer the checkout's virtual environment without requiring activation.
 # Override explicitly when validating another interpreter, for example:
-#   make PYTHON=python3.9 check
+#   make PYTHON=python3.9 check-python
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
-# Canonical test entrypoint for a source checkout.
-# The package uses a src/ layout, so bare
-#   $(PYTHON) -m unittest discover -s tests -v
-# fails with ModuleNotFoundError unless the package is installed into the
-# active environment. This target sets the import path for you.
-test:
+test-python:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v
 
-check: test
+check-python: test-python
 	$(PYTHON) -m compileall -q src tests
 	$(PYTHON) -c "import ast, pathlib; [ast.parse(p.read_text(), filename=str(p), feature_version=(3, 9)) for p in pathlib.Path('src').rglob('*.py')]; print('Python 3.9 syntax check passed')"
 	bash -n install.sh scripts/status-macos.sh scripts/uninstall-macos.sh
 
-build: check
+build-python: check-python
 	$(PYTHON) -m pip wheel . --no-deps --no-build-isolation -w dist
 
 export VERSION
