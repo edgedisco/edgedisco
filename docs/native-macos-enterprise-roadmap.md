@@ -71,7 +71,31 @@ A critical design boundary separates the local macOS endpoint package from the e
 
 ---
 
-## 3. Architecture option spectrum
+## 3. Unified engine with dual deployment targets & cross-platform parity
+
+EdgeDisco maintains a **single core discovery codebase** while offering two distinct deployment models tailored to developer evaluation versus enterprise production:
+
+| Dimension | Unprivileged User-Managed (`~/.edgedisco`) | Enterprise Root Package (Production MDM) |
+| --- | --- | --- |
+| **Target User** | Individual developer, security researcher | Enterprise IT / SecOps fleet administrator |
+| **Installation Command** | `curl -fsSL https://get.edgedisco.com | sh` or `pip install` | `sudo installer -pkg EdgeDisco.pkg -target /` via MDM |
+| **Privilege Level** | Unprivileged (`gui/<uid>`) | Root / Local System (`system`) + User Agent (`gui/<uid>`) |
+| **Installation Path** | `~/.edgedisco` | `/Applications/EdgeDisco.app` + `/Library/Application Support/EdgeDisco` |
+| **Container & VM Access** | User-owned runtime sockets only | Direct access to `/var/run/docker.sock`, Podman, and VM hypervisors |
+| **Tamper Resistance** | Low (developer can stop/remove services) | High (root-owned, MDM configuration profile protected) |
+| **Telemetry Upstream** | Local dashboard / optional individual OTLP | Automated enterprise fleet server synchronization |
+| **Lifecycle Commands** | `edgedisco start / stop / restart` | `edgedisco start / stop / restart --root` |
+
+### Cross-platform architecture parity
+This split establishes the blueprint across all supported endpoint operating systems:
+
+- **macOS:** Signed, notarized flat `.pkg` installing a root `LaunchDaemon` (`system`) and a user `LaunchAgent` (`gui/<uid>`), accompanied by a native Swift menu bar application.
+- **Linux:** Signed `.deb` / `.rpm` packages deploying a root `systemd` system service (privileged socket & process monitoring) alongside an unprivileged user session collector (`systemd --user`).
+- **Windows:** Signed `.msi` deploying a native Windows Service running as `LOCAL SYSTEM` (monitoring processes and Docker named pipes) alongside a user session startup task.
+
+---
+
+## 4. Architecture option spectrum
 
 ### Dimension A: User interface models
 
@@ -99,7 +123,7 @@ A critical design boundary separates the local macOS endpoint package from the e
 
 ---
 
-## 4. Native menu bar application details (Swift / AppKit)
+## 5. Native menu bar application details (Swift / AppKit)
 
 The user interface follows the lightweight model:
 
@@ -119,7 +143,7 @@ The user interface follows the lightweight model:
 
 ---
 
-## 5. Packaging & deployment (.pkg vs .app)
+## 6. Packaging & deployment (.pkg vs .app)
 
 ### Deliverable format: Signed `.pkg` installer
 
@@ -166,7 +190,7 @@ EdgeDisco-<version>.pkg
 
 ---
 
-## 6. Code signing, notarization, and TCC
+## 7. Code signing, notarization, and TCC
 
 ### Apple Developer ID requirements
 
@@ -191,7 +215,7 @@ To inspect local tool installations and process lineage without triggering user-
 
 ---
 
-## 7. MDM configuration & fleet policy
+## 8. MDM configuration & fleet policy
 
 Enterprise settings are managed without editing shell files via standard Apple Managed Preferences:
 
@@ -212,7 +236,7 @@ Supported MDM payload keys:
 
 ---
 
-## 8. Implementation roadmap
+## 9. Implementation roadmap
 
 ### Phase 1: Self-contained engine bundling & LaunchDaemon packaging
 - Package the existing Python engine into a self-contained Mach-O bundle using `PyInstaller` or `python-build-standalone`, eliminating external interpreter dependencies.

@@ -4,6 +4,40 @@ EdgeDisco does not currently inspect container runtimes or virtual-machine guest
 
 Container and VM evidence have different trust boundaries. A local container runtime can usually provide a narrowly selected process view to the current user. A VM deliberately hides guest processes from the host, so reliable inspection inside a guest requires an explicit guest command or a collector running in that guest.
 
+---
+
+## Privileged enterprise mode vs. unprivileged user mode
+
+EdgeDisco operates under a unified discovery engine that behaves according to its execution privileges:
+
+| Capability | Unprivileged User Mode (`~/.edgedisco`) | Enterprise Root Mode (LaunchDaemon / systemd) |
+| --- | --- | --- |
+| **Execution Context** | Logged-in user (`gui/<uid>`) | Root / Local System (`system`) |
+| **Socket Access** | User-owned or world-readable sockets only | Direct access to `/var/run/docker.sock`, `/var/run/podman/podman.sock` |
+| **Per-User VM Sockets** | Can only access current user's Colima/OrbStack/Docker sockets | Attaches across all user directories without permission friction |
+| **Fleet Scope** | Single interactive user session | Fleet-wide: all background services and multi-user sessions |
+| **Tamper Resistance** | Low (user can stop/unload process) | High (managed by MDM, requires root to terminate or modify) |
+| **Process Inspection** | Limited to container runtimes where user has group access | Full container process top (`/containers/{id}/top`) across all runtimes |
+| **VM Hypervisor Lineage** | Inferred from current user's process table | Host-level Darwin `libproc` / `sysctl` correlation of all hypervisor VMs |
+
+### Enterprise root discovery mechanics
+When running as a root LaunchDaemon on macOS (or systemd service on Linux):
+
+1. **System & VM socket discovery:** The collector detects both standard system sockets (`/var/run/docker.sock`) and user-scoped hypervisor sockets (OrbStack, Colima, Lima, Podman Machine) across `/Users/*` or `/home/*`.
+2. **Container process top inspection:** Rather than requiring agents inside every container, the daemon queries the Docker Engine API's `/containers/{id}/top` endpoint. This returns running process basenames inside container namespaces directly from the host.
+3. **Verified image digest matching:** Queries `/containers/json` for image SHA-256 digests and correlates them against EdgeDisco's fingerprint catalog.
+4. **Host hypervisor correlation:** Correlates running Virtualization.framework / QEMU processes with their respective socket bridges to map containers to specific VM instances.
+
+### Strict enterprise privacy guardrails
+Root privileges grant powerful host and container access. EdgeDisco enforces absolute privacy boundaries:
+
+- **Strictly NO environment variable inspection:** Developers frequently pass API keys, tokens, and database passwords in container environment variables. EdgeDisco **never** reads container `Config.Env`.
+- **Strictly NO mount or volume traversal:** Containers mounting host repositories or sensitive paths (`~/.ssh`, `~/.aws`) are never traversed.
+- **Strictly NO arbitrary `exec` shells:** The collector never executes arbitrary shell commands inside employee containers.
+- **Strictly sanitized telemetry:** Only normalized executable basenames (e.g. `node`, `python3`, `hermes`) and cataloged image SHA-256 digests are recorded.
+
+---
+
 ## Phase 1: baseline local-container detection
 
 The first implementation should discover agents in running containers without a separate opt-in when the current user already has access to the local container runtime.
