@@ -63,6 +63,9 @@ menu-bar app running. Its Overview tab reads both scopes and shows partial resul
 explicitly if one daemon is unavailable. Scope Details offers Products
 (catalog-matched findings grouped within the selected scope) and Evidence
 (individual records).
+Overview can filter to either scope or both and shows grouped-entry totals for
+installed, running, and previously-seen states. Installed and running totals can
+overlap; unavailable scopes are excluded and labeled rather than counted as zero.
 The Settings window can update My Session's scan interval and basic OTLP options
 without restarting. This Mac settings remain read-only there; the instructions
 below configure the system daemon.

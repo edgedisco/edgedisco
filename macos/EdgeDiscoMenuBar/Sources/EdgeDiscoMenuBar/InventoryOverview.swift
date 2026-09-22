@@ -26,11 +26,16 @@ struct OverviewProduct: Identifiable {
     let findings: [SourcedFinding]
 
     var running: Bool { findings.contains { $0.detection.running } }
+    var installed: Bool {
+        findings.contains { $0.detection.kind == "application" && $0.detection.present != false }
+    }
+    var previouslySeen: Bool { findings.allSatisfy { $0.detection.present == false } }
     var sourceCount: Int { Set(findings.map(\.scope)).count }
 
     static func group(_ findings: [SourcedFinding]) -> [OverviewProduct] {
         let grouped = Dictionary(grouping: findings) { row in
-            row.detection.productID.map { "product:\($0)" } ?? "evidence:\(row.detection.id)"
+            row.detection.productID.map { "product:\($0)" }
+                ?? "evidence:\(row.scope.rawValue):\(row.detection.id)"
         }
         return grouped.compactMap { id, rows in
             guard let first = rows.first else { return nil }
@@ -40,6 +45,35 @@ struct OverviewProduct: Identifiable {
         }.sorted {
             ($0.name.localizedLowercase, $0.vendor.localizedLowercase, $0.id)
                 < ($1.name.localizedLowercase, $1.vendor.localizedLowercase, $1.id)
+        }
+    }
+}
+
+struct OverviewTotals: Equatable {
+    let products: Int
+    let installed: Int
+    let running: Int
+    let previouslySeen: Int
+
+    init(_ products: [OverviewProduct]) {
+        self.products = products.count
+        installed = products.filter(\.installed).count
+        running = products.filter(\.running).count
+        previouslySeen = products.filter(\.previouslySeen).count
+    }
+}
+
+enum OverviewScopeFilter: String, CaseIterable, Identifiable {
+    case both = "Both Scopes"
+    case user = "My Session"
+    case system = "This Mac"
+
+    var id: String { rawValue }
+    var scope: InventoryScope? {
+        switch self {
+        case .both: nil
+        case .user: .user
+        case .system: .system
         }
     }
 }
@@ -67,6 +101,18 @@ final class InventoryOverviewModel: ObservableObject {
     }
     var products: [OverviewProduct] { OverviewProduct.group(findings) }
 
+    func state(for scope: InventoryScope) -> InventorySourceState {
+        scope == .user ? user : system
+    }
+
+    func findings(in scope: InventoryScope?) -> [SourcedFinding] {
+        findings.filter { scope == nil || $0.scope == scope }
+    }
+
+    func products(in scope: InventoryScope?) -> [OverviewProduct] {
+        OverviewProduct.group(findings(in: scope))
+    }
+
     func refresh() async {
         generation += 1
         let current = generation
@@ -92,9 +138,13 @@ final class InventoryOverviewModel: ObservableObject {
 struct InventoryOverviewView: View {
     @StateObject private var model = InventoryOverviewModel()
     @State private var search = ""
+    @State private var scopeFilter: OverviewScopeFilter = .both
+
+    private var scopedProducts: [OverviewProduct] { model.products(in: scopeFilter.scope) }
+    private var totals: OverviewTotals { OverviewTotals(scopedProducts) }
 
     private var visible: [OverviewProduct] {
-        model.products.filter {
+        scopedProducts.filter {
             search.isEmpty || "\($0.name) \($0.vendor)".localizedCaseInsensitiveContains(search)
         }
     }
@@ -111,19 +161,31 @@ struct InventoryOverviewView: View {
                 sourceSummary("My Session", state: model.user)
                 sourceSummary("This Mac", state: model.system)
             }
+            Picker("Scope", selection: $scopeFilter) {
+                ForEach(OverviewScopeFilter.allCases) { scope in
+                    Text(scope.rawValue).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
             if model.isLoading {
                 ProgressView("Loading both inventory sources…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let scope = scopeFilter.scope, model.state(for: scope).findings == nil {
+                Text("\(scope.rawValue) is unavailable. Select another scope or retry.")
+                    .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.availableSourceCount == 0 {
                 Text("Neither inventory source is available. Check the daemon status and retry.")
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                if model.availableSourceCount == 1 {
+                if scopeFilter == .both && model.availableSourceCount == 1 {
                     Text("Partial overview: one source is unavailable. Totals include only the source shown above.")
                         .foregroundStyle(.orange).font(.caption)
                 }
-                Text("\(model.products.count) grouped entries from \(model.findings.count) source findings")
+                Text("\(totals.products) grouped entries · \(totals.installed) installed · \(totals.running) running · \(totals.previouslySeen) previously seen")
+                    .font(.subheadline)
+                Text("\(model.findings(in: scopeFilter.scope).count) source findings · States can overlap; totals are before search.")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("Search products", text: $search)
                     .textFieldStyle(.roundedBorder)
@@ -140,7 +202,7 @@ struct InventoryOverviewView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(product.name).font(.headline)
-                                Text("\(product.vendor) · \(product.sourceCount) \(product.sourceCount == 1 ? "source" : "sources") · \(product.findings.count) findings\(product.running ? " · Running" : "")")
+                                Text("\(product.vendor) · \(product.sourceCount) \(product.sourceCount == 1 ? "source" : "sources") · \(product.findings.count) findings · \(product.running ? "Running" : product.installed ? "Installed" : product.previouslySeen ? "Previously seen" : "Observed")")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }

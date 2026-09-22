@@ -96,12 +96,14 @@ system settings still require administrator-managed configuration and restart.
 - The inventory window now has an Overview tab that reads both daemon scopes,
   combines catalog-matched products across them, and labels each source's
   findings or failure. A failed scope never becomes a misleading zero total.
-  Separate installed/running/historical cross-scope totals remain future work.
+  It now filters to either source or both and shows deduplicated installed,
+  running, and previously-seen grouped-entry totals. Installed and running can
+  overlap. Unknown findings with coincident IDs across scopes remain separate.
 - Added a bounded macOS app-bundle slice: direct `.app` names in `/Applications`
   and the user's Applications folder are matched to exact catalog names/aliases.
   Symlinks and nested folders are skipped; bundle metadata and versions are not
   read yet. This is narrower than Python's installed-app inventory.
-- Remaining: richer app metadata, editor-extension/MCP collectors, cross-scope state totals,
+- Remaining: richer app metadata, editor-extension/MCP collectors,
   interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.
