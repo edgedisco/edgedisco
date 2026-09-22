@@ -309,7 +309,7 @@ async fn malformed_unknown_oversized_partial_and_slow_clients_fail_closed() {
         serde_json::to_vec(&json!({"protocol_version":1,"request_id":"u","method":"unknown"}))
             .unwrap()
             .into_iter()
-            .chain([b'\n'])
+            .chain(*b"\n")
             .collect(),
         vec![b'x'; 129],
     ] {
