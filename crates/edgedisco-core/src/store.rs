@@ -1,5 +1,6 @@
 use crate::models::{Asset, Device, OutboxRecord, ScanReport, Session};
 use crate::redaction::{sha256_digest, validate_report};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -8,6 +9,82 @@ use std::sync::Mutex;
 use thiserror::Error;
 
 pub const DATABASE_VERSION: u32 = 4;
+const OTLP_MAX_PENDING: i64 = 5_000;
+const OTLP_MAX_PENDING_BYTES: i64 = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct OutboxLimits {
+    pending: i64,
+    bytes: i64,
+}
+
+fn record_outbox_drop(
+    conn: &Connection,
+    count: usize,
+    now: &str,
+    reason: &str,
+) -> Result<(), StoreError> {
+    if count > 0 {
+        conn.execute(
+            "UPDATE otlp_export_status SET dropped_events_total=dropped_events_total+?1, last_dropped_at=?2, last_drop_reason=?3 WHERE id=1",
+            params![count as i64, now, reason],
+        )?;
+    }
+    Ok(())
+}
+
+fn drop_queued_outbox(
+    conn: &Connection,
+    id: &str,
+    now: &str,
+    reason: &str,
+) -> Result<(), StoreError> {
+    let deleted = conn.execute(
+        "DELETE FROM otlp_outbox WHERE id=?1 AND status IN ('pending','retry')",
+        params![id],
+    )?;
+    if deleted > 0 {
+        conn.execute(
+            "DELETE FROM otlp_asset_state WHERE last_outbox_id=?1",
+            params![id],
+        )?;
+        record_outbox_drop(conn, deleted, now, reason)?;
+    }
+    Ok(())
+}
+
+fn outbox_cutoff(now: &str, days: i64) -> Result<String, StoreError> {
+    let timestamp = DateTime::parse_from_rfc3339(now)
+        .map_err(|_| StoreError::InvalidArgument("invalid outbox timestamp".into()))?
+        .with_timezone(&Utc);
+    Ok((timestamp - ChronoDuration::days(days)).to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+fn prune_outbox(conn: &Connection, now: &str) -> Result<(), StoreError> {
+    let pending_cutoff = outbox_cutoff(now, 7)?;
+    let aged = {
+        let mut statement = conn.prepare(
+            "SELECT id FROM otlp_outbox WHERE status IN ('pending','retry') AND created_at<?1 ORDER BY created_at,id LIMIT 500",
+        )?;
+        let rows = statement
+            .query_map(params![pending_cutoff], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for id in aged {
+        drop_queued_outbox(conn, &id, now, "age")?;
+    }
+    for (status, column, days) in [("delivered", "delivered_at", 1), ("failed", "failed_at", 7)] {
+        let cutoff = outbox_cutoff(now, days)?;
+        conn.execute(
+            &format!(
+                "DELETE FROM otlp_outbox WHERE id IN (SELECT id FROM otlp_outbox WHERE status=?1 AND COALESCE({column},created_at)<?2 ORDER BY created_at,id LIMIT 500)"
+            ),
+            params![status, cutoff],
+        )?;
+    }
+    Ok(())
+}
 
 fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>, rusqlite::Error> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -93,9 +170,32 @@ fn queue_projection(
     conn: &Connection,
     asset_key: &str,
     state_hash: &str,
+    event: Value,
+    recorded_at: &str,
+    always_emit: bool,
+) -> Result<(), StoreError> {
+    queue_projection_with_limits(
+        conn,
+        asset_key,
+        state_hash,
+        event,
+        recorded_at,
+        always_emit,
+        OutboxLimits {
+            pending: OTLP_MAX_PENDING,
+            bytes: OTLP_MAX_PENDING_BYTES,
+        },
+    )
+}
+
+fn queue_projection_with_limits(
+    conn: &Connection,
+    asset_key: &str,
+    state_hash: &str,
     mut event: Value,
     recorded_at: &str,
     always_emit: bool,
+    limits: OutboxLimits,
 ) -> Result<(), StoreError> {
     let prior: Option<String> = conn
         .query_row(
@@ -113,10 +213,44 @@ fn queue_projection(
     let payload_json = serde_json::to_string(&event)?;
     let payload_bytes = payload_json.len() as i64;
 
-    conn.execute(
-        "DELETE FROM otlp_outbox WHERE asset_key = ?1 AND status IN ('pending','retry')",
-        params![asset_key],
-    )?;
+    if payload_bytes > limits.bytes {
+        record_outbox_drop(conn, 1, recorded_at, "oversize")?;
+        return Ok(());
+    }
+    let superseded = {
+        let mut statement = conn.prepare(
+            "SELECT id FROM otlp_outbox WHERE asset_key=?1 AND status IN ('pending','retry')",
+        )?;
+        let rows = statement
+            .query_map(params![asset_key], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for id in superseded {
+        drop_queued_outbox(conn, &id, recorded_at, "superseded")?;
+    }
+    loop {
+        let (count, bytes): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(payload_bytes),0) FROM otlp_outbox WHERE status IN ('pending','retry','sending')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if count < limits.pending && bytes.saturating_add(payload_bytes) <= limits.bytes {
+            break;
+        }
+        let oldest: Option<String> = conn
+            .query_row(
+                "SELECT id FROM otlp_outbox WHERE status IN ('pending','retry') ORDER BY created_at,id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(oldest) = oldest else {
+            record_outbox_drop(conn, 1, recorded_at, "capacity")?;
+            return Ok(());
+        };
+        drop_queued_outbox(conn, &oldest, recorded_at, "capacity")?;
+    }
     conn.execute(
         r#"
         INSERT INTO otlp_outbox (
@@ -152,6 +286,7 @@ fn queue_scan_outbox(
     recorded_at: &str,
     asset_count: usize,
 ) -> Result<(), StoreError> {
+    prune_outbox(conn, recorded_at)?;
     let assets = {
         let mut statement = conn.prepare(
             r#"
@@ -1288,17 +1423,26 @@ impl Store {
                 params![expired as i64, now],
             )?;
         }
-        conn.execute(
-            r#"
-            DELETE FROM otlp_outbox AS queued
-            WHERE status IN ('pending','retry') AND NOT EXISTS (
-                SELECT 1 FROM otlp_asset_state AS latest
-                WHERE latest.asset_key=queued.asset_key
-                  AND latest.last_outbox_id=queued.id
-            )
-            "#,
-            [],
-        )?;
+        prune_outbox(&conn, now)?;
+        let superseded = {
+            let mut statement = conn.prepare(
+                r#"
+                SELECT queued.id FROM otlp_outbox AS queued
+                WHERE status IN ('pending','retry') AND NOT EXISTS (
+                    SELECT 1 FROM otlp_asset_state AS latest
+                    WHERE latest.asset_key=queued.asset_key
+                      AND latest.last_outbox_id=queued.id
+                ) LIMIT 500
+                "#,
+            )?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for id in superseded {
+            drop_queued_outbox(&conn, &id, now, "superseded")?;
+        }
 
         let mut candidates_stmt = conn.prepare(
             r#"
@@ -1685,5 +1829,146 @@ mod tests {
             .expect("record found");
         assert_eq!(delivered.status, "delivered");
         assert_eq!(delivered.delivered_at, Some("2026-09-21T00:01:00Z".into()));
+    }
+
+    #[test]
+    fn queue_capacity_evicts_pending_but_preserves_active_leases() {
+        let store = Store::open_in_memory().expect("store");
+        let limits = OutboxLimits {
+            pending: 2,
+            bytes: 1024,
+        };
+        let conn = store.conn.lock().unwrap();
+        for (asset, timestamp) in [
+            ("asset-a", "2026-09-22T00:00:00Z"),
+            ("asset-b", "2026-09-22T00:00:01Z"),
+            ("asset-c", "2026-09-22T00:00:02Z"),
+        ] {
+            queue_projection_with_limits(
+                &conn,
+                asset,
+                "state",
+                json!({"attributes": {}}),
+                timestamp,
+                false,
+                limits,
+            )
+            .expect("queue projection");
+        }
+        let pending: Vec<String> = conn
+            .prepare("SELECT asset_key FROM otlp_outbox ORDER BY created_at")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(pending, ["asset-b", "asset-c"]);
+        let dropped: (i64, String) = conn
+            .query_row(
+                "SELECT dropped_events_total,last_drop_reason FROM otlp_export_status WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dropped, (1, "capacity".into()));
+        drop(conn);
+
+        let claimed = store
+            .claim_outbox(
+                2,
+                1024,
+                "active-lease",
+                "2026-09-22T00:05:00Z",
+                "2026-09-22T00:00:03Z",
+            )
+            .expect("claim active rows");
+        assert_eq!(claimed.len(), 2);
+        let conn = store.conn.lock().unwrap();
+        queue_projection_with_limits(
+            &conn,
+            "asset-d",
+            "state",
+            json!({"attributes": {}}),
+            "2026-09-22T00:00:04Z",
+            false,
+            limits,
+        )
+        .expect("reject projection under active capacity");
+        let states: Vec<String> = conn
+            .prepare("SELECT status FROM otlp_outbox ORDER BY created_at")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(states, ["sending", "sending"]);
+        let reason: String = conn
+            .query_row(
+                "SELECT last_drop_reason FROM otlp_export_status WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason, "capacity");
+        queue_projection_with_limits(
+            &conn,
+            "asset-e",
+            "state",
+            json!({"attributes": {}}),
+            "2026-09-22T00:00:05Z",
+            false,
+            OutboxLimits {
+                pending: 2,
+                bytes: 10,
+            },
+        )
+        .expect("reject oversized projection");
+        let reason: String = conn
+            .query_row(
+                "SELECT last_drop_reason FROM otlp_export_status WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason, "oversize");
+    }
+
+    #[test]
+    fn pruning_removes_aged_work_and_completed_rows() {
+        let store = Store::open_in_memory().expect("store");
+        let conn = store.conn.lock().unwrap();
+        queue_projection(
+            &conn,
+            "old-asset",
+            "state",
+            json!({"attributes": {}}),
+            "2026-09-01T00:00:00Z",
+            false,
+        )
+        .expect("queue old event");
+        conn.execute(
+            "INSERT INTO otlp_outbox(id,asset_key,payload_json,payload_bytes,status,next_attempt_at,created_at,delivered_at) VALUES('delivered-old','delivered-asset','{}',2,'delivered','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        prune_outbox(&conn, "2026-09-22T00:00:00Z").expect("prune");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM otlp_outbox", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+        let dedup: i64 = conn
+            .query_row("SELECT COUNT(*) FROM otlp_asset_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(dedup, 0);
+        let reason: String = conn
+            .query_row(
+                "SELECT last_drop_reason FROM otlp_export_status WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason, "age");
     }
 }

@@ -121,7 +121,11 @@ You can also run a one-shot collection and export directly from the terminal:
 - The daemon polls the outbox every second independently of process scans. The exporter uses
   at-least-once delivery with exponential backoff, honors a collector's bounded `Retry-After`,
   and fences completions by lease ownership.
-- If the remote collector is temporarily offline, events remain staged in SQLite and are flushed upon reconnection.
+- The active queue is limited to 5,000 records and 16 MiB. Older queued records may be dropped
+  under pressure; active leases are preserved. Queued records expire after seven days, while
+  delivered and failed records are retained for one and seven days respectively.
+- If the remote collector is temporarily offline, queued events are retried upon reconnection,
+  subject to the queue limits and retention period above.
 
 ---
 
