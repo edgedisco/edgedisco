@@ -11,45 +11,66 @@ struct StatusPopoverView: View {
     let quitAction: () -> Void
     @State private var isShowingDetections = false
 
+    private var formattedLastScan: String {
+        guard let iso = viewModel.lastScanTimestamp, !iso.isEmpty else { return "Never" }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = formatter.date(from: iso)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: iso)
+        }
+        guard let validDate = date else { return iso }
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateStyle = .none
+        displayFormatter.timeStyle = .medium
+        return displayFormatter.string(from: validDate)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Circle()
                     .fill(viewModel.isHealthy ? Color.green : Color.orange)
-                    .frame(width: 10, height: 10)
+                    .frame(width: 8, height: 8)
                     .accessibilityLabel(viewModel.isHealthy ? "Healthy" : "Warning")
                 Text(viewModel.isHealthy ? "EdgeDisco is healthy" : "EdgeDisco needs attention")
                     .font(.headline)
             }
+            .padding(.top, 2)
 
             if let statusMessage = viewModel.statusMessage {
                 Text(statusMessage)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
-                    Text("Assets")
+                    Text("Assets").foregroundStyle(.secondary)
                     Text("\(viewModel.assetCount)")
                         .monospacedDigit()
+                        .fontWeight(.medium)
                         .accessibilityLabel("Asset count \(viewModel.assetCount)")
                 }
                 GridRow {
-                    Text("Devices")
+                    Text("Devices").foregroundStyle(.secondary)
                     Text("\(viewModel.deviceCount)")
                         .monospacedDigit()
+                        .fontWeight(.medium)
                         .accessibilityLabel("Device count \(viewModel.deviceCount)")
                 }
                 GridRow {
-                    Text("Last scan")
-                    Text(viewModel.lastScanTimestamp ?? "Never")
+                    Text("Last scan").foregroundStyle(.secondary)
+                    Text(formattedLastScan)
                         .lineLimit(1)
-                        .accessibilityLabel("Last scan \(viewModel.lastScanTimestamp ?? "Never")")
+                        .accessibilityLabel("Last scan \(formattedLastScan)")
                 }
             }
+            .padding(.vertical, 2)
 
-            HStack {
+            HStack(spacing: 8) {
                 Button {
                     Task { await viewModel.scanNow() }
                 } label: {
@@ -77,8 +98,8 @@ struct StatusPopoverView: View {
                     .keyboardShortcut("q")
             }
         }
-        .padding(16)
-        .frame(width: 320)
+        .padding(14)
+        .frame(width: 290)
         .sheet(isPresented: $isShowingDetections) {
             DetectionsListView(viewModel: viewModel)
         }
