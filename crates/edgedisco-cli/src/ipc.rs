@@ -32,7 +32,10 @@ pub struct PeerIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerPolicy {
     User { daemon_uid: u32 },
-    System { allowed_uids: BTreeSet<u32> },
+    System {
+        allowed_uids: BTreeSet<u32>,
+        allowed_gids: BTreeSet<u32>,
+    },
 }
 
 impl PeerPolicy {
@@ -40,8 +43,11 @@ impl PeerPolicy {
         Self::User { daemon_uid }
     }
 
-    pub fn system(allowed_uids: BTreeSet<u32>) -> Self {
-        Self::System { allowed_uids }
+    pub fn system(allowed_uids: BTreeSet<u32>, allowed_gids: BTreeSet<u32>) -> Self {
+        Self::System {
+            allowed_uids,
+            allowed_gids,
+        }
     }
 
     pub fn authorize(&self, peer: PeerIdentity) -> bool {
@@ -50,7 +56,10 @@ impl PeerPolicy {
         }
         match self {
             Self::User { daemon_uid } => peer.uid == *daemon_uid,
-            Self::System { allowed_uids } => allowed_uids.contains(&peer.uid),
+            Self::System {
+                allowed_uids,
+                allowed_gids,
+            } => allowed_uids.contains(&peer.uid) || allowed_gids.contains(&peer.gid),
         }
     }
 }
@@ -105,16 +114,17 @@ impl IpcConfig {
     pub fn system(
         socket_path: PathBuf,
         allowed_uids: BTreeSet<u32>,
+        allowed_gids: BTreeSet<u32>,
         socket_owner: Option<(u32, u32)>,
     ) -> Result<Self, IpcError> {
-        if allowed_uids.is_empty() {
+        if allowed_uids.is_empty() && allowed_gids.is_empty() {
             return Err(IpcError::InvalidConfig(
-                "system IPC mode requires at least one --ipc-allowed-uid".into(),
+                "system IPC mode requires at least one --ipc-allowed-uid or --ipc-allowed-gid".into(),
             ));
         }
         Ok(Self {
             socket_path,
-            policy: PeerPolicy::system(allowed_uids),
+            policy: PeerPolicy::system(allowed_uids, allowed_gids),
             socket_mode: 0o660,
             socket_owner,
             private_parent: false,

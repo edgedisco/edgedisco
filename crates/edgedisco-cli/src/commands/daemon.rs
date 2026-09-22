@@ -89,6 +89,7 @@ fn ipc_config(args: &DaemonArgs) -> Result<IpcConfig, Box<dyn std::error::Error>
     match args.ipc_mode {
         IpcModeArg::User => {
             if !args.ipc_allowed_uid.is_empty()
+                || !args.ipc_allowed_gid.is_empty()
                 || args.ipc_owner_uid.is_some()
                 || args.ipc_group_gid.is_some()
             {
@@ -106,13 +107,23 @@ fn ipc_config(args: &DaemonArgs) -> Result<IpcConfig, Box<dyn std::error::Error>
                 .ipc_socket
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("/var/run/edgedisco.sock"));
-            let allowed = args
+            let allowed_uids = args
                 .ipc_allowed_uid
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>();
+            let allowed_gids = args
+                .ipc_allowed_gid
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
             let owner = args.ipc_owner_uid.zip(args.ipc_group_gid);
-            Ok(IpcConfig::system(path, allowed, owner)?)
+            Ok(IpcConfig::system(
+                path,
+                allowed_uids,
+                allowed_gids,
+                owner,
+            )?)
         }
     }
 }

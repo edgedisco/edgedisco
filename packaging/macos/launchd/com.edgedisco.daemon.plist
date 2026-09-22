@@ -18,10 +18,12 @@
     <string>/var/run/edgedisco.sock</string>
     <string>--ipc-allowed-uid</string>
     <string>0</string>
+    <string>--ipc-allowed-gid</string>
+    <string>20</string>
     <string>--ipc-owner-uid</string>
     <string>0</string>
     <string>--ipc-group-gid</string>
-    <string>0</string>
+    <string>20</string>
   </array>
   <key>UserName</key>
   <string>root</string>

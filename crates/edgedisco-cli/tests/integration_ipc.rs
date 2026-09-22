@@ -81,7 +81,7 @@ fn peer_policy_is_explicit_and_rejects_disallowed_identities() {
         pid: Some(1)
     }));
 
-    let system = PeerPolicy::system(BTreeSet::from([700_u32]));
+    let system = PeerPolicy::system(BTreeSet::from([700_u32]), BTreeSet::from([20_u32]));
     assert!(system.authorize(PeerIdentity {
         uid: 700,
         gid: 80,
@@ -92,9 +92,14 @@ fn peer_policy_is_explicit_and_rejects_disallowed_identities() {
         gid: 0,
         pid: Some(2)
     }));
-    assert!(!system.authorize(PeerIdentity {
+    assert!(system.authorize(PeerIdentity {
         uid: 501,
         gid: 20,
+        pid: Some(2)
+    }));
+    assert!(!system.authorize(PeerIdentity {
+        uid: 501,
+        gid: 99,
         pid: Some(2)
     }));
 }

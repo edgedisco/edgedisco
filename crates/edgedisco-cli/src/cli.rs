@@ -110,6 +110,10 @@ pub struct DaemonArgs {
     #[arg(long)]
     pub ipc_allowed_uid: Vec<u32>,
 
+    /// Numeric peer GID allowed in system IPC mode (repeatable)
+    #[arg(long)]
+    pub ipc_allowed_gid: Vec<u32>,
+
     /// Numeric owner UID applied to a system-mode socket by installation configuration
     #[arg(long, requires = "ipc_group_gid")]
     pub ipc_owner_uid: Option<u32>,

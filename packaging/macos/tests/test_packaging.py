@@ -67,10 +67,12 @@ def test_launchd_plists_are_valid_and_separate_privileges():
         "/var/run/edgedisco.sock",
         "--ipc-allowed-uid",
         "0",
+        "--ipc-allowed-gid",
+        "20",
         "--ipc-owner-uid",
         "0",
         "--ipc-group-gid",
-        "0",
+        "20",
     ]
     assert daemon["RunAtLoad"] is True
     assert daemon["KeepAlive"] is True
