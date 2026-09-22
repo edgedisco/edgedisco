@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   rust:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - name: Rust verification
@@ -19,7 +19,7 @@ jobs:
         run: make build-rust
 
   macos-package:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - name: Verify native Swift packages
