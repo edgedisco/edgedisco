@@ -30,5 +30,6 @@ The platform guides own the commands for managed installations. Component refere
 ## Plans
 
 - [Container and VM discovery roadmap](container-vm-discovery-roadmap.md): planned container and virtual-machine evidence levels.
+- [Native macOS enterprise roadmap](native-macos-enterprise-roadmap.md): enterprise MDM architecture, signed .pkg distribution, privilege separation, and native Swift status item UI.
 
 For source setup, test commands, and pull-request expectations, see [CONTRIBUTING.md](../CONTRIBUTING.md).
