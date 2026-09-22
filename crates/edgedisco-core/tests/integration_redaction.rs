@@ -165,4 +165,7 @@ fn test_validate_timestamp_formats() {
     // Missing timezone
     assert!(validate_timestamp("2026-09-21T12:00:00").is_err());
     assert!(validate_timestamp("").is_err());
+    assert!(validate_timestamp("x").is_err());
+    assert!(validate_timestamp("not-a-dateZ").is_err());
+    assert!(validate_timestamp("é").is_err());
 }

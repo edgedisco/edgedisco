@@ -2,13 +2,11 @@ use crate::cli::{DaemonArgs, IpcModeArg};
 use crate::ipc::{default_user_socket_path, DaemonIpcState, IpcConfig, IpcServer, ScanCommand};
 use crate::util::{
     current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
-    get_os_version,
+    get_os_version, local_device_id, random_token_hash,
 };
 use edgedisco_core::exporter::{ExporterConfig, OtlpExporter};
 use edgedisco_core::models::Device;
-use edgedisco_core::redaction::sha256_digest;
 use edgedisco_core::store::Store;
-use edgedisco_sensor::{scan_available_containers, scan_host_processes, scan_processes};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,24 +16,23 @@ use tokio::sync::{mpsc, watch};
 
 /// Ensure an enrolled local device record exists in the store, returning the device ID.
 pub fn ensure_local_device(store: &Store) -> Result<String, Box<dyn std::error::Error>> {
-    let devices = store.list_devices(1)?;
-    if let Some(dev) = devices.first() {
-        return Ok(dev.id.clone());
-    }
-
     let hostname = get_hostname();
-    let dev_id = format!("dev-{}", &sha256_digest(format!("local:{hostname}"))[0..16]);
+    let os = get_os_name();
+    let machine = get_machine();
+    let dev_id = local_device_id(&hostname, &os, machine.as_deref());
+    if store.get_device(&dev_id)?.is_some() {
+        return Ok(dev_id);
+    }
     let now = current_timestamp();
-    let token_hash = sha256_digest(format!("token:{dev_id}"));
 
     let device = Device::new(
         dev_id.clone(),
         hostname,
-        get_os_name(),
+        os,
         get_os_version(),
-        get_machine(),
+        machine,
         Some(env!("CARGO_PKG_VERSION").to_string()),
-        token_hash,
+        random_token_hash(),
         now.clone(),
         now,
     );
@@ -46,21 +43,8 @@ pub fn ensure_local_device(store: &Store) -> Result<String, Box<dyn std::error::
 
 /// Run a single collection iteration: process scan, catalog classification, and SQLite upsert.
 pub fn run_daemon_iteration(store: &Store) -> Result<usize, Box<dyn std::error::Error>> {
-    let device_id = ensure_local_device(store)?;
-    let now = current_timestamp();
-
-    let observations = scan_host_processes()?;
-    let assets = super::scan::combine_discovery_assets(
-        scan_processes(&observations),
-        scan_available_containers(),
-    );
-    let asset_count = assets.len();
-
-    for asset in &assets {
-        store.upsert_asset(&device_id, asset, &now)?;
-    }
-
-    Ok(asset_count)
+    let report = super::scan::generate_scan_report()?;
+    super::scan::persist_scan_report_to_store(store, &report)
 }
 
 async fn export_outbox_if_configured(
@@ -76,10 +60,11 @@ async fn export_outbox_if_configured(
     let outcome = exporter.export_once_at(store, &current_timestamp()).await?;
     if outcome.claimed > 0 {
         eprintln!(
-            "[{}] OTLP export: {} delivered, {} scheduled for retry",
+            "[{}] OTLP export: {} delivered, {} scheduled for retry, {} failed",
             current_timestamp(),
             outcome.delivered,
-            outcome.retried
+            outcome.retried,
+            outcome.failed
         );
     }
     Ok(())

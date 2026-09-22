@@ -8,6 +8,21 @@ fn test_parse_scan_command() {
     match cli.command {
         Commands::Scan(args) => {
             assert!(!args.pretty);
+            assert!(!args.persist);
+            assert!(args.db.is_none());
+        }
+        _ => panic!("expected Scan command"),
+    }
+}
+
+#[test]
+fn test_parse_scan_with_persistence_flag() {
+    let cli =
+        Cli::try_parse_from(["edgedisco", "scan", "--persist"]).expect("parse persistent scan");
+    match cli.command {
+        Commands::Scan(args) => {
+            assert!(args.persist);
+            assert!(args.db.is_none());
         }
         _ => panic!("expected Scan command"),
     }

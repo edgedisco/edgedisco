@@ -46,6 +46,17 @@ fn test_store(path: &Path) -> Arc<Store> {
     store
         .upsert_asset("dev-test", &asset, "2026-09-22T00:00:00Z")
         .expect("persist asset");
+    let mut duplicate_display = Asset::new(
+        "second-private-fingerprint",
+        "application",
+        "Cursor",
+        "Anysphere",
+        true,
+    );
+    duplicate_display.version = Some("1.2.3".into());
+    store
+        .upsert_asset("dev-test", &duplicate_display, "2026-09-22T00:00:00Z")
+        .expect("persist duplicate display asset");
     store
 }
 
@@ -169,14 +180,24 @@ async fn real_socket_negotiates_projects_sanitized_state_and_triggers_scan() {
     .await;
     assert_eq!(status["result"]["healthy"], true);
     assert_eq!(status["result"]["device_count"], 1);
-    assert_eq!(status["result"]["detection_count"], 1);
+    assert_eq!(status["result"]["detection_count"], 2);
 
     let detections = request(
         &socket,
         json!({"protocol_version": PROTOCOL_VERSION, "request_id":"d1", "method":"detections"}),
     )
     .await;
-    assert_eq!(detections["result"]["detections"][0]["name"], "Cursor");
+    let rows = detections["result"]["detections"]
+        .as_array()
+        .expect("detection array");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row["name"] == "Cursor"));
+    let ids: std::collections::HashSet<_> = rows
+        .iter()
+        .map(|row| row["id"].as_str().expect("opaque detection ID"))
+        .collect();
+    assert_eq!(ids.len(), 2, "identical display rows need distinct IDs");
+    assert!(ids.iter().all(|id| id.len() == 64));
     let serialized = serde_json::to_string(&detections).unwrap();
     for forbidden in [
         "fingerprint",
@@ -185,6 +206,7 @@ async fn real_socket_negotiates_projects_sanitized_state_and_triggers_scan() {
         "metadata",
         "token_hash",
         "must-not-leak",
+        "second-private-fingerprint",
     ] {
         assert!(
             !serialized.contains(forbidden),
@@ -205,6 +227,36 @@ async fn real_socket_negotiates_projects_sanitized_state_and_triggers_scan() {
     task.await.expect("join server").expect("serve cleanly");
     assert!(!socket.exists(), "server must remove its own socket");
     drop(worker);
+}
+
+#[tokio::test]
+async fn user_socket_does_not_change_existing_parent_permissions() {
+    let temp = TempDir::new().expect("temp dir");
+    let parent = temp.path().join("shared");
+    std::fs::create_dir(&parent).expect("create parent");
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755))
+        .expect("set parent mode");
+    let socket = parent.join("edgedisco.sock");
+    let store = test_store(&temp.path().join("inventory.db"));
+    let state = Arc::new(DaemonIpcState::new("now"));
+    let (scan_tx, _scan_rx) = mpsc::channel(1);
+
+    let server = IpcServer::bind(
+        IpcConfig::user(socket, unsafe { libc::geteuid() }),
+        store,
+        state,
+        scan_tx,
+    )
+    .await
+    .expect("bind socket");
+
+    let mode = std::fs::metadata(&parent)
+        .expect("parent metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o755);
+    drop(server);
 }
 
 #[tokio::test]

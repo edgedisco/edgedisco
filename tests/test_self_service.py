@@ -461,6 +461,23 @@ class ServiceLifecycleTests(unittest.TestCase):
             self.assertEqual(result, {AGENT_LABEL: "already stopped", SERVER_LABEL: "already stopped"})
 
     @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_macos_stop_failure_is_reported(self, launchctl, _system):
+        def fake_launchctl(action, *args, **kwargs):
+            if action == "print":
+                return subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="running")
+            return subprocess.CompletedProcess(
+                ["launchctl"], returncode=1, stderr="operation not permitted"
+            )
+
+        launchctl.side_effect = fake_launchctl
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home, labels=(AGENT_LABEL,))
+            with self.assertRaisesRegex(RuntimeError, "could not stop"):
+                stop_macos(root=layout.root, home=home)
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
     @patch("ai_asset_inventory.self_service.stop_macos")
     @patch("ai_asset_inventory.self_service.start_macos")
     def test_macos_restart_services(self, start_mac, stop_mac, _system):
@@ -525,6 +542,26 @@ class ServiceLifecycleTests(unittest.TestCase):
 
             restart_res = restart_linux(root=layout.root, home=home)
             self.assertEqual(restart_res, {SERVER_LABEL: "restarted", AGENT_LABEL: "restarted"})
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Linux")
+    @patch("ai_asset_inventory.self_service.require_systemd_user")
+    @patch("ai_asset_inventory.self_service._systemctl")
+    def test_linux_stop_failure_is_reported(self, systemctl, require_sd, _system):
+        def fake_systemctl(action, *args, **kwargs):
+            if action == "is-active":
+                return subprocess.CompletedProcess(["systemctl"], returncode=0, stdout="active")
+            if action == "stop":
+                return subprocess.CompletedProcess(
+                    ["systemctl"], returncode=1, stderr="permission denied"
+                )
+            return subprocess.CompletedProcess(["systemctl"], returncode=0, stdout="")
+
+        systemctl.side_effect = fake_systemctl
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_linux_units(home, labels=(SERVER_LABEL,))
+            with self.assertRaisesRegex(RuntimeError, "could not stop"):
+                stop_linux(root=layout.root, home=home)
 
     @patch("ai_asset_inventory.self_service.platform.system", return_value="Windows")
     def test_unsupported_os_raises(self, _system):

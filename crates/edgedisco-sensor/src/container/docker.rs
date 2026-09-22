@@ -75,7 +75,49 @@ fn http_get(socket: &Path, path: &str) -> Result<Vec<u8>, ContainerScanError> {
     if status != "200" {
         return Err(ContainerScanError::Http(format!("HTTP status {status}")));
     }
-    Ok(response[(header_end + 4)..].to_vec())
+    let body = &response[(header_end + 4)..];
+    let chunked = header.lines().skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("transfer-encoding")
+                && value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+        })
+    });
+    if chunked {
+        decode_chunked(body)
+    } else {
+        Ok(body.to_vec())
+    }
+}
+
+fn decode_chunked(mut input: &[u8]) -> Result<Vec<u8>, ContainerScanError> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = input
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| ContainerScanError::Http("invalid chunk size line".into()))?;
+        let size_text = std::str::from_utf8(&input[..line_end])
+            .map_err(|_| ContainerScanError::Http("non-UTF-8 chunk size".into()))?;
+        let size =
+            usize::from_str_radix(size_text.split(';').next().unwrap_or_default().trim(), 16)
+                .map_err(|_| ContainerScanError::Http("invalid chunk size".into()))?;
+        input = &input[line_end + 2..];
+        if size == 0 {
+            return Ok(decoded);
+        }
+        if input.len() < size + 2 || &input[size..size + 2] != b"\r\n" {
+            return Err(ContainerScanError::Http("truncated chunked body".into()));
+        }
+        if decoded.len().saturating_add(size) > MAX_RESPONSE_BYTES {
+            return Err(ContainerScanError::Http(
+                "decoded response exceeded size limit".into(),
+            ));
+        }
+        decoded.extend_from_slice(&input[..size]);
+        input = &input[size + 2..];
+    }
 }
 
 fn executable_basename(command: &str) -> Option<&str> {

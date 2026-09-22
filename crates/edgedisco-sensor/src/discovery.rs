@@ -115,10 +115,7 @@ pub fn classify_process(row: &ProcessObservation) -> Option<(&'static str, &'sta
                     return None;
                 }
             }
-            return Some((
-                Box::leak(agent.name.clone().into_boxed_str()),
-                Box::leak(agent.vendor.clone().into_boxed_str()),
-            ));
+            return Some((agent.name.as_str(), agent.vendor.as_str()));
         }
     }
 
@@ -161,10 +158,7 @@ pub fn classify_process(row: &ProcessObservation) -> Option<(&'static str, &'sta
             };
 
             if console_script || package_match {
-                return Some((
-                    Box::leak(agent.name.clone().into_boxed_str()),
-                    Box::leak(agent.vendor.clone().into_boxed_str()),
-                ));
+                return Some((agent.name.as_str(), agent.vendor.as_str()));
             }
         }
 

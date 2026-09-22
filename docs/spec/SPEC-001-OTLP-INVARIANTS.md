@@ -17,10 +17,10 @@ This document specifies the formal behavioral requirements, privacy invariants, 
 | Requirement ID | Statement | Spec Section | Fixtures / Tests | Implementation Paths | Verification Command | Status |
 |---|---|---|---|---|---|---|
 | `REQ-ED-001` | **Privacy Noninterference:** Outbox payloads, OTLP Logs records, exports, and API responses MUST NEVER contain prompt text, model responses, source code, credentials, environment variables, full filesystem paths, or raw CLI command tokens. | §3.1 | `privacy_canaries.json`<br>`test_privacy_invariants.py` | `src/ai_asset_inventory/otlp_events.py`<br>`src/ai_asset_inventory/otlp_encoder.py` | `pytest tests/test_privacy_invariants.py` | COVERED |
-| `REQ-ED-002` | **Schema v2 Determinism:** Identical inventory evidence and monotonic timestamps produce identical observation digests (`sha256:<hex>`) and byte-for-byte matching OTLP Protobuf / JSON output. | §3.2, §4 | `observation_v2.pb`<br>`observation_v2.json`<br>`test_otlp_fixtures.py` | `src/ai_asset_inventory/otlp_events.py`<br>`src/ai_asset_inventory/otlp_encoder.py` | `pytest tests/test_otlp_fixtures.py` | COVERED |
+| `REQ-ED-002` | **Schema v2 Determinism:** Identical inventory evidence and monotonic timestamps produce identical observation digests (`sha256:<hex>`) and byte-for-byte matching OTLP Protobuf / JSON output. | §3.2, §4 | `observation_v2.pb`<br>`observation_v2.json`<br>`test_otlp_fixtures.py`<br>`integration_exporter.rs` | `src/ai_asset_inventory/otlp_events.py`<br>`src/ai_asset_inventory/otlp_encoder.py`<br>`crates/edgedisco-core/src/exporter.rs` | `pytest tests/test_otlp_fixtures.py`<br>`cargo test -p edgedisco-core --test integration_exporter` | COVERED |
 | `REQ-ED-003` | **Outbox At-Least-Once Delivery & Idempotency:** Duplicate scans deduplicate into existing observation state; failed OTLP HTTP transmissions leave outbox records in retryable state without duplicate side-effects. | §3.3 | `test_outbox_invariants.py` | `src/ai_asset_inventory/otlp_store.py`<br>`src/ai_asset_inventory/otlp_exporter.py` | `pytest tests/test_outbox_invariants.py` | COVERED |
 | `REQ-ED-004` | **Evidence Class Partitioning:** Installed, configured, running, observed, and simulated states remain strictly partitioned and cannot collapse into ambiguous boolean flags. | §3.4 | `test_detector.py`<br>`test_inventory_lifecycle.py` | `src/ai_asset_inventory/detector.py`<br>`src/ai_asset_inventory/models.py` | `pytest tests/test_inventory_lifecycle.py` | COVERED |
-| `REQ-ED-005` | **Heartbeat Telemetry:** Periodic device inventory heartbeats emit `edgedisco.device.inventory` with exact total and simulated asset counts. | §4.2 | `device_inventory_v2.pb`<br>`device_inventory_v2.json`<br>`test_otlp_encoder.py` | `src/ai_asset_inventory/otlp_events.py`<br>`src/ai_asset_inventory/otlp_encoder.py` | `pytest tests/test_otlp_encoder.py` | COVERED |
+| `REQ-ED-005` | **Heartbeat Telemetry:** Periodic device inventory heartbeats emit `edgedisco.device.inventory` with exact total and simulated asset counts. | §4.2 | `device_inventory_v2.pb`<br>`device_inventory_v2.json`<br>`test_otlp_encoder.py`<br>`integration_exporter.rs` | `src/ai_asset_inventory/otlp_events.py`<br>`src/ai_asset_inventory/otlp_encoder.py`<br>`crates/edgedisco-core/src/exporter.rs` | `pytest tests/test_otlp_encoder.py`<br>`cargo test -p edgedisco-core --test integration_exporter` | COVERED |
 | `REQ-ED-006` | **Authorization & Perimeter Security:** Missing, invalid, or mismatched device enrollment tokens reject with HTTP 401/403 and produce zero SQLite writes. | §3.5 | `test_server.py`<br>`test_self_service.py` | `src/ai_asset_inventory/server.py`<br>`src/ai_asset_inventory/database.py` | `pytest tests/test_server.py` | COVERED |
 
 ---
@@ -55,8 +55,10 @@ This document specifies the formal behavioral requirements, privacy invariants, 
 ## 4. OTLP Wire Format Specification (Schema v2)
 
 ### 4.1 Asset Observation (`edgedisco.asset.observed`)
-- **Resource:** `service.name: "edgedisco"`, `service.version: "0.5.0"`
-- **Scope:** `ai_asset_inventory.otlp_encoder (v0.5.0)`
+- **Resource:** `service.name: "edgedisco"`; `service.version` is the emitting package version
+  (`0.5.0` in the Python golden fixtures and the Cargo package version in the native build).
+- **Scope:** Identifies the encoder implementation and its package version:
+  `ai_asset_inventory.otlp_encoder` for Python or `edgedisco_core.exporter` for native macOS.
 - **LogRecord:**
   - `time_unix_nano`: Unix epoch timestamp in nanoseconds
   - `observed_time_unix_nano`: Observation time in nanoseconds

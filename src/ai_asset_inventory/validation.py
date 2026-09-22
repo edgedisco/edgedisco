@@ -76,7 +76,7 @@ def validate_report(payload):
         _object(asset, allowed_asset_fields, "asset")
         for key in ("fingerprint", "kind", "name", "vendor"):
             _string(asset.get(key), 255, key)
-        if asset["kind"] not in {"application", "process", "agent_runtime", "mcp_server"}:
+        if asset["kind"] not in {"application", "container_application", "process", "agent_runtime", "mcp_server"}:
             raise ValueError("unsupported asset kind")
         if type(asset.get("running")) is not bool:
             raise ValueError("running must be boolean")

@@ -1,6 +1,8 @@
+use edgedisco_core::redaction::sha256_digest;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// Generate an RFC 3339 UTC timestamp string.
 pub fn current_timestamp() -> String {
@@ -149,6 +151,16 @@ pub fn get_os_name() -> String {
     } else {
         std::env::consts::OS.to_string()
     }
+}
+
+/// Stable local device identity shared by one-shot and daemon collection paths.
+pub fn local_device_id(hostname: &str, os: &str, machine: Option<&str>) -> String {
+    sha256_digest(format!("local:{hostname}:{os}:{}", machine.unwrap_or("")))[..32].to_string()
+}
+
+/// Generate an unguessable stored credential hash for local-only device rows.
+pub fn random_token_hash() -> String {
+    sha256_digest(Uuid::new_v4().as_bytes())
 }
 
 /// Default database path, either from explicit root directory or user home `~/.edgedisco/data/inventory.db`.

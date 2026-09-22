@@ -67,6 +67,7 @@ package_version=$(xmllint --xpath 'string(/pkg-info/@version)' "$PACKAGE_INFO")
 
 binary="$PAYLOAD/usr/local/libexec/edgedisco/edgedisco"
 app_binary="$PAYLOAD/Applications/EdgeDisco.app/Contents/MacOS/EdgeDiscoMenuBar"
+app_bundle="$PAYLOAD/Applications/EdgeDisco.app"
 app_info="$PAYLOAD/Applications/EdgeDisco.app/Contents/Info.plist"
 daemon_plist="$PAYLOAD/Library/LaunchDaemons/com.edgedisco.daemon.plist"
 agent_plist="$PAYLOAD/Library/LaunchAgents/com.edgedisco.agent.plist"
@@ -202,12 +203,13 @@ esac
 if [ "$PLAN" -eq 1 ]; then
     printf '%s\n' "Validated preflight-only release plan; no identities, Keychain items, output artifacts, or network services are changed."
     printf '%s\n' "1. pkgutil --expand-full '$UNSIGNED' <temporary-directory>"
-    printf '%s\n' "2. codesign --force --options runtime --timestamp --sign '$DEVELOPER_ID_APPLICATION' <payload>/usr/local/libexec/edgedisco/edgedisco"
-    printf '%s\n' "3. pkgbuild the validated signed payload and trusted scripts as com.edgedisco.pkg version $VERSION"
-    printf '%s\n' "4. productbuild --sign '$DEVELOPER_ID_INSTALLER' ... '<same-directory-hidden-candidate>'"
-    printf '%s\n' "5. xcrun notarytool submit '<same-directory-hidden-candidate>' --keychain-profile '$NOTARY_PROFILE' --wait"
-    printf '%s\n' "6. xcrun stapler staple '<same-directory-hidden-candidate>'"
-    printf '%s\n' "7. atomically publish '$SIGNED' only after signature and notarization checks pass"
+    printf '%s\n' "2. codesign --force --options runtime --timestamp --sign '$DEVELOPER_ID_APPLICATION' both native executables and the EdgeDisco.app bundle"
+    printf '%s\n' "3. verify strict Developer ID signatures on the executable and application bundle"
+    printf '%s\n' "4. pkgbuild the validated signed payload and trusted scripts as com.edgedisco.pkg version $VERSION"
+    printf '%s\n' "5. productbuild --sign '$DEVELOPER_ID_INSTALLER' ... '<same-directory-hidden-candidate>'"
+    printf '%s\n' "6. xcrun notarytool submit '<same-directory-hidden-candidate>' --keychain-profile '$NOTARY_PROFILE' --wait"
+    printf '%s\n' "7. xcrun stapler staple '<same-directory-hidden-candidate>'"
+    printf '%s\n' "8. atomically publish '$SIGNED' only after signature and notarization checks pass"
     exit 0
 fi
 
@@ -222,6 +224,9 @@ security find-certificate -a -c "$DEVELOPER_ID_INSTALLER" >/dev/null || {
 
 codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$binary"
 codesign --verify --strict --verbose=2 "$binary"
+codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$app_binary"
+codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$app_bundle"
+codesign --verify --deep --strict --verbose=2 "$app_bundle"
 pkgbuild --root "$PAYLOAD" --scripts "$SCRIPTS" --identifier com.edgedisco.pkg \
     --version "$VERSION" --install-location / --ownership recommended \
     --filter '(^|/)\._.*' "$WORK/EdgeDisco.pkg"

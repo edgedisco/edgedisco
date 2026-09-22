@@ -53,6 +53,25 @@ fn spawn_runtime(
     (dir, socket, handle)
 }
 
+fn spawn_chunked_runtime(body: &'static str) -> (TempDir, PathBuf, thread::JoinHandle<()>) {
+    let dir = TempDir::new().expect("temp dir");
+    let socket = dir.path().join("docker.sock");
+    let listener = UnixListener::bind(&socket).expect("bind mock socket");
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).expect("read request");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            body.len(),
+            body
+        )
+        .expect("write response");
+    });
+    (dir, socket, handle)
+}
+
 #[test]
 fn scans_container_list_and_top_over_unix_socket() {
     let containers = r#"[{"Id":"raw-container-id","Image":"ollama/ollama:latest","ImageID":"sha256:abc","Labels":{"secret":"ignore"},"Config":{"Env":[{"not":"a string"}]}}]"#;
@@ -119,4 +138,12 @@ fn candidate_paths_are_local_and_include_supported_runtimes() {
 
     // Ensure the temporary fixture cannot leak into later tests if a failure occurs.
     let _ = fs::metadata(home);
+}
+
+#[test]
+fn accepts_chunked_container_runtime_response() {
+    let (_dir, socket, server) = spawn_chunked_runtime("[]");
+    let assets = scan_socket(&socket).expect("decode chunked response");
+    server.join().expect("server thread");
+    assert!(assets.is_empty());
 }

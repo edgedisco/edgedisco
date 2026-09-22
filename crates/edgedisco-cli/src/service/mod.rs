@@ -1,14 +1,15 @@
 use std::process::Command;
 use thiserror::Error;
 
-pub const SERVER_LABEL: &str = "com.edgedisco.server";
+pub const DAEMON_LABEL: &str = "com.edgedisco.daemon";
+pub const SERVER_LABEL: &str = DAEMON_LABEL;
 pub const AGENT_LABEL: &str = "com.edgedisco.agent";
 pub const EXPORTER_LABEL: &str = "com.edgedisco.otlp-export";
 pub const SERVICE_LABELS: [&str; 3] = [SERVER_LABEL, AGENT_LABEL, EXPORTER_LABEL];
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
-    #[error("Unknown service: {0}; choose from server, agent, otlp-export")]
+    #[error("Unknown service: {0}; choose from daemon, agent, otlp-export")]
     UnknownService(String),
     #[error("Privilege required: {0}")]
     PrivilegeRequired(String),
@@ -39,7 +40,7 @@ pub fn resolve_service_labels(
     for item in services {
         let name = item.as_ref().trim().to_lowercase();
         let label = match name.as_str() {
-            "server" | "com.edgedisco.server" => SERVER_LABEL,
+            "daemon" | "server" | "com.edgedisco.daemon" | "com.edgedisco.server" => DAEMON_LABEL,
             "agent" | "com.edgedisco.agent" => AGENT_LABEL,
             "otlp-export" | "exporter" | "com.edgedisco.otlp-export" => EXPORTER_LABEL,
             _ => return Err(ServiceError::UnknownService(item.as_ref().to_string())),
@@ -108,9 +109,15 @@ impl ServiceExecutor for NativeServiceExecutor {
                         .output()?;
                     if status.status.success() {
                         if label == SERVER_LABEL {
-                            let _ = Command::new("launchctl")
+                            let out = Command::new("launchctl")
                                 .args(["kickstart", "-k", &target])
                                 .output()?;
+                            if !out.status.success() {
+                                let err = String::from_utf8_lossy(&out.stderr);
+                                return Err(ServiceError::CommandFailed(format!(
+                                    "could not restart {label}: {err}"
+                                )));
+                            }
                             Ok("started".to_string())
                         } else {
                             Ok("already running".to_string())
@@ -154,7 +161,7 @@ impl ServiceExecutor for NativeServiceExecutor {
                     }
                 }
                 ServiceAction::Restart => {
-                    let _ = self.execute(ServiceAction::Stop, label, is_root);
+                    self.execute(ServiceAction::Stop, label, is_root)?;
                     self.execute(ServiceAction::Start, label, is_root)?;
                     Ok("restarted".to_string())
                 }
@@ -180,7 +187,13 @@ impl ServiceExecutor for NativeServiceExecutor {
                         if label == SERVER_LABEL {
                             let mut restart_cmd = Command::new("systemctl");
                             restart_cmd.args(&base_args).args(["restart", &unit]);
-                            restart_cmd.output()?;
+                            let out = restart_cmd.output()?;
+                            if !out.status.success() {
+                                let err = String::from_utf8_lossy(&out.stderr);
+                                return Err(ServiceError::CommandFailed(format!(
+                                    "could not restart {label}: {err}"
+                                )));
+                            }
                             Ok("started".to_string())
                         } else {
                             Ok("already running".to_string())
@@ -206,7 +219,13 @@ impl ServiceExecutor for NativeServiceExecutor {
 
                     let mut stop_cmd = Command::new("systemctl");
                     stop_cmd.args(&base_args).args(["stop", &unit]);
-                    stop_cmd.output()?;
+                    let out = stop_cmd.output()?;
+                    if !out.status.success() {
+                        let err = String::from_utf8_lossy(&out.stderr);
+                        return Err(ServiceError::CommandFailed(format!(
+                            "could not stop {label}: {err}"
+                        )));
+                    }
 
                     if is_active {
                         Ok("stopped".to_string())
@@ -270,7 +289,11 @@ impl ServiceManager {
         if is_root {
             self.executor.check_root_privileges()?;
         }
-        let mut targets = resolve_service_labels(services)?;
+        let mut targets = if services.is_empty() {
+            vec![if is_root { DAEMON_LABEL } else { AGENT_LABEL }]
+        } else {
+            resolve_service_labels(services)?
+        };
         // Sort according to canonical SERVICE_LABELS order
         targets.sort_by_key(|lbl| {
             SERVICE_LABELS
@@ -298,7 +321,11 @@ impl ServiceManager {
         if is_root {
             self.executor.check_root_privileges()?;
         }
-        let mut targets = resolve_service_labels(services)?;
+        let mut targets = if services.is_empty() {
+            vec![if is_root { DAEMON_LABEL } else { AGENT_LABEL }]
+        } else {
+            resolve_service_labels(services)?
+        };
         // Sort in reverse canonical SERVICE_LABELS order
         targets.sort_by_key(|lbl| {
             std::cmp::Reverse(SERVICE_LABELS.iter().position(|&s| s == *lbl).unwrap_or(0))
@@ -321,7 +348,11 @@ impl ServiceManager {
         if is_root {
             self.executor.check_root_privileges()?;
         }
-        let targets = resolve_service_labels(services)?;
+        let targets = if services.is_empty() {
+            vec![if is_root { DAEMON_LABEL } else { AGENT_LABEL }]
+        } else {
+            resolve_service_labels(services)?
+        };
         self.stop(&targets, is_root)?;
         self.start(&targets, is_root)?;
         Ok(targets

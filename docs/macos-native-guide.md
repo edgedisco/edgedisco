@@ -99,6 +99,10 @@ You can also run a one-shot collection and export directly from the terminal:
 
 ### OTLP Outbox & Delivery Guarantees
 - Discovered asset events are recorded to the SQLite `otlp_outbox` table.
+- Requests use OTLP Logs over HTTP with binary protobuf and
+  `Content-Type: application/x-protobuf`.
+- Native encoder regression tests decode the wire payload and compare both asset observations and
+  device heartbeats with the Python golden protobuf fixtures under `tests/fixtures/golden_otlp`.
 - The exporter uses an at-least-once transactional outbox pattern with exponential backoff and lease management.
 - If the remote collector is temporarily offline, events remain staged in SQLite and are flushed upon reconnection.
 

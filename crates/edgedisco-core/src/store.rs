@@ -1,10 +1,248 @@
-use crate::models::{Asset, Device, OutboxRecord, Session};
+use crate::models::{Asset, Device, OutboxRecord, ScanReport, Session};
+use crate::redaction::{sha256_digest, validate_report};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 use thiserror::Error;
 
 pub const DATABASE_VERSION: u32 = 4;
+
+fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>, rusqlite::Error> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect()
+}
+
+type OutboxProjection = (String, String, Value);
+type ProjectionRank = (bool, bool, String, String);
+type QueuedProjection = (String, Value, ProjectionRank);
+
+fn digest_json(value: &Value) -> Result<String, StoreError> {
+    Ok(sha256_digest(serde_json::to_vec(value)?))
+}
+
+fn project_asset(
+    device_id: &str,
+    observed_at: &str,
+    asset: &Asset,
+) -> Result<Option<OutboxProjection>, StoreError> {
+    if !matches!(
+        asset.kind.as_str(),
+        "application" | "process" | "agent_runtime"
+    ) {
+        return Ok(None);
+    }
+    let present = asset.present.unwrap_or(true);
+    let simulated = asset
+        .metadata
+        .get("demo_lab")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let host_app = asset.metadata.get("host_app").and_then(Value::as_str);
+    let relationship = asset.metadata.get("relationship").and_then(Value::as_str);
+    if asset.kind == "agent_runtime" && (host_app.is_none() || relationship.is_none()) {
+        return Ok(None);
+    }
+
+    let logical_key = digest_json(&json!({
+        "schema": 1,
+        "device.id": device_id,
+        "asset.kind": asset.kind,
+        "asset.name": asset.name,
+        "asset.vendor": asset.vendor,
+        "asset.host_app": host_app,
+        "edgedisco.simulated": simulated,
+    }))?;
+    let state_hash = digest_json(&json!({
+        "asset.running": asset.running,
+        "asset.present": present,
+        "asset.relationship": relationship,
+        "asset.version": asset.version,
+    }))?;
+    let mut attributes = serde_json::Map::from_iter([
+        ("edgedisco.schema.version".into(), json!(2)),
+        ("device.id".into(), json!(device_id)),
+        ("asset.kind".into(), json!(asset.kind)),
+        ("asset.name".into(), json!(asset.name)),
+        ("asset.vendor".into(), json!(asset.vendor)),
+        ("asset.running".into(), json!(asset.running)),
+        ("asset.present".into(), json!(present)),
+        ("edgedisco.simulated".into(), json!(simulated)),
+    ]);
+    if let Some(version) = &asset.version {
+        attributes.insert("asset.version".into(), json!(version));
+    }
+    if let Some(host_app) = host_app {
+        attributes.insert("asset.host_app".into(), json!(host_app));
+    }
+    if let Some(relationship) = relationship {
+        attributes.insert("asset.relationship".into(), json!(relationship));
+    }
+    let event = json!({
+        "timestamp": observed_at,
+        "event.name": "edgedisco.asset.observed",
+        "resource": {"service.name": "edgedisco"},
+        "attributes": attributes,
+    });
+    Ok(Some((logical_key, state_hash, event)))
+}
+
+fn queue_projection(
+    conn: &Connection,
+    asset_key: &str,
+    state_hash: &str,
+    mut event: Value,
+    recorded_at: &str,
+    always_emit: bool,
+) -> Result<(), StoreError> {
+    let prior: Option<String> = conn
+        .query_row(
+            "SELECT state_hash FROM otlp_asset_state WHERE asset_key = ?1",
+            params![asset_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if !always_emit && prior.as_deref() == Some(state_hash) {
+        return Ok(());
+    }
+    let outbox_id = format!("sha256:{}", sha256_digest(uuid::Uuid::new_v4().as_bytes()));
+    event["attributes"]["edgedisco.observation.id"] = json!(outbox_id);
+    event["recorded_at"] = json!(recorded_at);
+    let payload_json = serde_json::to_string(&event)?;
+    let payload_bytes = payload_json.len() as i64;
+
+    conn.execute(
+        "DELETE FROM otlp_outbox WHERE asset_key = ?1 AND status IN ('pending','retry')",
+        params![asset_key],
+    )?;
+    conn.execute(
+        r#"
+        INSERT INTO otlp_outbox (
+            id, asset_key, payload_json, payload_bytes, status, next_attempt_at, created_at
+        ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)
+        "#,
+        params![
+            outbox_id,
+            asset_key,
+            payload_json,
+            payload_bytes,
+            recorded_at
+        ],
+    )?;
+    conn.execute(
+        r#"
+        INSERT INTO otlp_asset_state (asset_key, state_hash, last_outbox_id, updated_at)
+        VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(asset_key) DO UPDATE SET
+            state_hash=excluded.state_hash,
+            last_outbox_id=excluded.last_outbox_id,
+            updated_at=excluded.updated_at
+        "#,
+        params![asset_key, state_hash, outbox_id, recorded_at],
+    )?;
+    Ok(())
+}
+
+fn queue_scan_outbox(
+    conn: &Connection,
+    device_id: &str,
+    observed_at: &str,
+    recorded_at: &str,
+    asset_count: usize,
+) -> Result<(), StoreError> {
+    let assets = {
+        let mut statement = conn.prepare(
+            r#"
+            SELECT fingerprint, kind, name, vendor, running, present, version,
+                   path_hash, command_hash, binary_sha256, binary_fingerprint_status,
+                   fingerprint_library_version, metadata_json, first_seen, last_seen
+            FROM assets WHERE device_id = ?1 ORDER BY fingerprint
+            "#,
+        )?;
+        let rows = statement.query_map(params![device_id], |row| {
+            let metadata_json: String = row.get(12)?;
+            Ok(Asset {
+                fingerprint: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                vendor: row.get(3)?,
+                running: row.get::<_, i32>(4)? != 0,
+                present: row.get::<_, Option<i32>>(5)?.map(|value| value != 0),
+                version: row.get(6)?,
+                path_hash: row.get(7)?,
+                command_hash: row.get(8)?,
+                binary_sha256: row.get(9)?,
+                binary_fingerprint_status: row.get(10)?,
+                fingerprint_library_version: row.get(11)?,
+                metadata: serde_json::from_str(&metadata_json).unwrap_or_default(),
+                first_seen: row.get(13)?,
+                last_seen: row.get(14)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let simulated_count = assets
+        .iter()
+        .filter(|asset| {
+            asset.present.unwrap_or(true)
+                && asset
+                    .metadata
+                    .get("demo_lab")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .count();
+
+    let heartbeat_key = digest_json(&json!({
+        "event": "edgedisco.device.inventory",
+        "device.id": device_id,
+    }))?;
+    let mut heartbeat = json!({
+        "timestamp": observed_at,
+        "event.name": "edgedisco.device.inventory",
+        "resource": {"service.name": "edgedisco"},
+        "attributes": {
+            "edgedisco.schema.version": 2,
+            "device.id": device_id,
+            "inventory.asset_count": asset_count,
+            "inventory.simulated_asset_count": simulated_count,
+        },
+    });
+    let heartbeat_state = digest_json(&heartbeat)?;
+    queue_projection(
+        conn,
+        &heartbeat_key,
+        &heartbeat_state,
+        heartbeat.take(),
+        recorded_at,
+        true,
+    )?;
+
+    let mut projections: HashMap<String, QueuedProjection> = HashMap::new();
+    for asset in assets {
+        let Some((key, state, event)) = project_asset(device_id, observed_at, &asset)? else {
+            continue;
+        };
+        let rank = (
+            asset.present.unwrap_or(true),
+            asset.running,
+            asset.last_seen.clone().unwrap_or_default(),
+            asset.fingerprint.clone(),
+        );
+        if projections
+            .get(&key)
+            .is_none_or(|(_, _, existing_rank)| rank > *existing_rank)
+        {
+            projections.insert(key, (state, event, rank));
+        }
+    }
+    for (key, (state, event, _)) in projections {
+        queue_projection(conn, &key, &state, event, recorded_at, false)?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -60,7 +298,7 @@ impl Store {
 
     /// Initialize SQLite schema with WAL mode and foreign key constraints.
     pub fn initialize(&self) -> Result<(), StoreError> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
 
@@ -69,10 +307,9 @@ impl Store {
             return Err(StoreError::DowngradeRefused);
         }
 
-        conn.execute_batch(
+        let tx = conn.transaction()?;
+        tx.execute_batch(
             r#"
-            BEGIN IMMEDIATE;
-
             CREATE TABLE IF NOT EXISTS devices (
                 id TEXT PRIMARY KEY,
                 hostname TEXT NOT NULL,
@@ -225,10 +462,66 @@ impl Store {
             CREATE VIEW IF NOT EXISTS sessions AS SELECT * FROM agent_sessions;
             CREATE VIEW IF NOT EXISTS outbox AS SELECT * FROM otlp_outbox;
 
-            PRAGMA user_version = 4;
-            COMMIT;
             "#,
         )?;
+
+        let asset_columns = table_columns(&tx, "assets")?;
+        if !asset_columns.contains("present") {
+            tx.execute(
+                "ALTER TABLE assets ADD COLUMN present INTEGER CHECK(present IN (0,1))",
+                [],
+            )?;
+        }
+
+        let outbox_columns = table_columns(&tx, "otlp_outbox")?;
+        if !outbox_columns.contains("lease_id") {
+            tx.execute_batch(
+                r#"
+                CREATE TABLE otlp_outbox_migrated (
+                    id TEXT PRIMARY KEY, asset_key TEXT NOT NULL, payload_json TEXT NOT NULL,
+                    payload_bytes INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','retry','sending','delivered','failed')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL, delivered_at TEXT, last_error_code TEXT,
+                    lease_id TEXT, lease_expires_at TEXT, last_attempt_at TEXT, failed_at TEXT,
+                    last_http_status INTEGER
+                );
+                INSERT INTO otlp_outbox_migrated (
+                    id, asset_key, payload_json, payload_bytes, status, attempt_count,
+                    next_attempt_at, created_at, delivered_at, last_error_code
+                )
+                SELECT id, asset_key, payload_json, payload_bytes, status, attempt_count,
+                    next_attempt_at, created_at, delivered_at, last_error_code
+                FROM otlp_outbox;
+                DROP TABLE otlp_outbox;
+                ALTER TABLE otlp_outbox_migrated RENAME TO otlp_outbox;
+                CREATE INDEX idx_otlp_outbox_due ON otlp_outbox(status, next_attempt_at);
+                "#,
+            )?;
+        }
+
+        let status_columns = table_columns(&tx, "otlp_export_status")?;
+        for declaration in [
+            "attempted_events_total INTEGER NOT NULL DEFAULT 0",
+            "retried_events_total INTEGER NOT NULL DEFAULT 0",
+            "delivered_events_total INTEGER NOT NULL DEFAULT 0",
+            "failed_events_total INTEGER NOT NULL DEFAULT 0",
+            "last_attempt_at TEXT",
+            "last_success_at TEXT",
+            "last_failure_at TEXT",
+            "last_failure_code TEXT",
+            "last_http_status INTEGER",
+        ] {
+            let name = declaration.split_whitespace().next().unwrap_or_default();
+            if !status_columns.contains(name) {
+                tx.execute(
+                    &format!("ALTER TABLE otlp_export_status ADD COLUMN {declaration}"),
+                    [],
+                )?;
+            }
+        }
+        tx.pragma_update(None, "user_version", DATABASE_VERSION)?;
+        tx.commit()?;
 
         Ok(())
     }
@@ -275,6 +568,141 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Persist a complete inventory snapshot and optionally queue changed OTLP projections.
+    pub fn ingest_scan(
+        &self,
+        device: &Device,
+        report: &ScanReport,
+        queue_outbox: bool,
+    ) -> Result<usize, StoreError> {
+        validate_report(report).map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT device_id, asset_count FROM scans WHERE id = ?1",
+                params![report.scan_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_device, asset_count)) = existing {
+            if existing_device != device.id {
+                return Err(StoreError::InvalidArgument(
+                    "scan ID already belongs to another device".into(),
+                ));
+            }
+            tx.commit()?;
+            return Ok(asset_count.max(0) as usize);
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO devices (id, hostname, os, os_version, machine, agent_version, token_hash, enrolled_at, last_seen)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+                hostname=excluded.hostname, os=excluded.os, os_version=excluded.os_version,
+                machine=excluded.machine, agent_version=excluded.agent_version,
+                last_seen=excluded.last_seen
+            "#,
+            params![
+                device.id,
+                device.hostname,
+                device.os,
+                device.os_version,
+                device.machine,
+                device.agent_version,
+                device.token_hash,
+                device.enrolled_at,
+                device.last_seen,
+            ],
+        )?;
+
+        let newer_exists: bool = tx.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM scans
+                WHERE device_id = ?1 AND julianday(observed_at) > julianday(?2)
+                  AND julianday(observed_at) <= julianday(received_at, '+5 minutes')
+            )
+            "#,
+            params![device.id, report.observed_at],
+            |row| row.get(0),
+        )?;
+        let privacy_json = serde_json::to_string(&report.privacy)?;
+        tx.execute(
+            r#"
+            INSERT INTO scans (id, device_id, observed_at, received_at, asset_count, privacy_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                report.scan_id,
+                device.id,
+                report.observed_at,
+                device.last_seen,
+                report.assets.len() as i64,
+                privacy_json,
+            ],
+        )?;
+        if newer_exists {
+            tx.commit()?;
+            return Ok(report.assets.len());
+        }
+
+        tx.execute(
+            "UPDATE assets SET running = 0, present = 0 WHERE device_id = ?1",
+            params![device.id],
+        )?;
+        for asset in &report.assets {
+            let metadata_json = serde_json::to_string(&asset.metadata)?;
+            tx.execute(
+                r#"
+                INSERT INTO assets (
+                    device_id, fingerprint, kind, name, vendor, version,
+                    path_hash, command_hash, binary_sha256, binary_fingerprint_status,
+                    fingerprint_library_version, metadata_json, running, first_seen, last_seen, present
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1)
+                ON CONFLICT(device_id, fingerprint) DO UPDATE SET
+                    kind=excluded.kind, name=excluded.name, vendor=excluded.vendor,
+                    version=excluded.version, path_hash=excluded.path_hash,
+                    command_hash=excluded.command_hash, binary_sha256=excluded.binary_sha256,
+                    binary_fingerprint_status=excluded.binary_fingerprint_status,
+                    fingerprint_library_version=excluded.fingerprint_library_version,
+                    metadata_json=excluded.metadata_json, running=excluded.running,
+                    present=1, last_seen=excluded.last_seen
+                "#,
+                params![
+                    device.id,
+                    asset.fingerprint,
+                    asset.kind,
+                    asset.name,
+                    asset.vendor,
+                    asset.version,
+                    asset.path_hash,
+                    asset.command_hash,
+                    asset.binary_sha256,
+                    asset.binary_fingerprint_status,
+                    asset.fingerprint_library_version,
+                    metadata_json,
+                    asset.running as i32,
+                    report.observed_at,
+                    report.observed_at,
+                ],
+            )?;
+        }
+        if queue_outbox {
+            queue_scan_outbox(
+                &tx,
+                &device.id,
+                &report.observed_at,
+                &device.last_seen,
+                report.assets.len(),
+            )?;
+        }
+        tx.commit()?;
+        Ok(report.assets.len())
     }
 
     /// Retrieve device by ID.
@@ -676,6 +1104,22 @@ impl Store {
                 record.last_http_status,
             ],
         )?;
+        conn.execute(
+            r#"
+            INSERT INTO otlp_asset_state(asset_key, state_hash, last_outbox_id, updated_at)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(asset_key) DO UPDATE SET
+                state_hash=excluded.state_hash,
+                last_outbox_id=excluded.last_outbox_id,
+                updated_at=excluded.updated_at
+            "#,
+            params![
+                record.asset_key,
+                sha256_digest(record.payload_json.as_bytes()),
+                record.id,
+                record.created_at,
+            ],
+        )?;
         Ok(())
     }
 
@@ -782,6 +1226,38 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute("BEGIN IMMEDIATE", [])?;
 
+        let expired = conn.execute(
+            r#"
+            UPDATE otlp_outbox
+            SET status='retry', lease_id=NULL, lease_expires_at=NULL,
+                next_attempt_at=?1, last_error_code='lease_expired'
+            WHERE status='sending' AND lease_expires_at <= ?1
+            "#,
+            params![now],
+        )?;
+        if expired > 0 {
+            conn.execute(
+                r#"
+                UPDATE otlp_export_status
+                SET retried_events_total=retried_events_total+?1,
+                    last_failure_at=?2, last_failure_code='lease_expired'
+                WHERE id=1
+                "#,
+                params![expired as i64, now],
+            )?;
+        }
+        conn.execute(
+            r#"
+            DELETE FROM otlp_outbox AS queued
+            WHERE status IN ('pending','retry') AND NOT EXISTS (
+                SELECT 1 FROM otlp_asset_state AS latest
+                WHERE latest.asset_key=queued.asset_key
+                  AND latest.last_outbox_id=queued.id
+            )
+            "#,
+            [],
+        )?;
+
         let mut candidates_stmt = conn.prepare(
             r#"
             SELECT id, asset_key, payload_json, payload_bytes, status, attempt_count,
@@ -789,6 +1265,11 @@ impl Store {
                    lease_expires_at, last_attempt_at, failed_at, last_http_status
             FROM otlp_outbox
             WHERE status IN ('pending', 'retry') AND next_attempt_at <= ?1
+              AND EXISTS (
+                  SELECT 1 FROM otlp_asset_state AS latest
+                  WHERE latest.asset_key=otlp_outbox.asset_key
+                    AND latest.last_outbox_id=otlp_outbox.id
+              )
             ORDER BY created_at ASC, id ASC
             LIMIT ?2
             "#,

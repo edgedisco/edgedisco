@@ -48,6 +48,10 @@ pub struct ScanArgs {
     /// Persist discovered assets to this SQLite inventory database
     #[arg(long)]
     pub db: Option<PathBuf>,
+
+    /// Persist to the default per-user inventory database
+    #[arg(long, conflicts_with = "db")]
+    pub persist: bool,
 }
 
 #[derive(Debug, Args)]
@@ -71,7 +75,7 @@ pub struct ServiceArgs {
     #[arg(long)]
     pub root: bool,
 
-    /// Target service name(s): server, agent, otlp-export, exporter (default: all installed services)
+    /// Target service name(s): daemon, agent, otlp-export, exporter
     #[arg(value_name = "SERVICE")]
     pub services: Vec<String>,
 }

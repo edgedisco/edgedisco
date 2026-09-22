@@ -8,6 +8,7 @@
   <array>
     <string>/usr/local/libexec/edgedisco/edgedisco</string>
     <string>scan</string>
+    <string>--persist</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/</string>

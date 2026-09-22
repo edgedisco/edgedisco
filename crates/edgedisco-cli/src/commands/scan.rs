@@ -1,7 +1,9 @@
 use crate::cli::ScanArgs;
-use crate::util::{current_timestamp, get_hostname, get_machine, get_os_name, get_os_version};
+use crate::util::{
+    current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
+    get_os_version, local_device_id, random_token_hash,
+};
 use edgedisco_core::models::{Asset, Device, DeviceReport, PrivacyFlags, ScanReport};
-use edgedisco_core::redaction::sha256_digest;
 use edgedisco_core::store::Store;
 use edgedisco_sensor::{scan_available_containers, scan_host_processes, scan_processes};
 use std::collections::HashSet;
@@ -20,8 +22,11 @@ pub fn combine_discovery_assets(host: Vec<Asset>, containers: Vec<Asset>) -> Vec
 /// Run native process and local container observation, then build a ScanReport.
 pub fn generate_scan_report() -> Result<ScanReport, Box<dyn std::error::Error>> {
     let observations = scan_host_processes()?;
-    let assets =
+    let mut assets =
         combine_discovery_assets(scan_processes(&observations), scan_available_containers());
+    for asset in &mut assets {
+        asset.present = None;
+    }
 
     let device = DeviceReport {
         hostname: get_hostname(),
@@ -32,7 +37,7 @@ pub fn generate_scan_report() -> Result<ScanReport, Box<dyn std::error::Error>> 
     };
 
     let report = ScanReport {
-        schema_version: Some(1),
+        schema_version: Some(2),
         scan_id: format!("scan-{}", Uuid::new_v4()),
         observed_at: current_timestamp(),
         device,
@@ -49,15 +54,20 @@ pub fn persist_scan_report(
     report: &ScanReport,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(database_path)?;
-    let device_id = format!(
-        "dev-{}",
-        &sha256_digest(format!(
-            "{}:{}:{}",
-            report.device.hostname,
-            report.device.os,
-            report.device.machine.as_deref().unwrap_or("")
-        ))[..16]
+    persist_scan_report_to_store(&store, report)?;
+    Ok(())
+}
+
+pub fn persist_scan_report_to_store(
+    store: &Store,
+    report: &ScanReport,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let device_id = local_device_id(
+        &report.device.hostname,
+        &report.device.os,
+        report.device.machine.as_deref(),
     );
+    let received_at = current_timestamp();
     let device = Device::new(
         device_id.clone(),
         report.device.hostname.clone(),
@@ -65,22 +75,22 @@ pub fn persist_scan_report(
         report.device.os_version.clone(),
         report.device.machine.clone(),
         report.device.agent_version.clone(),
-        sha256_digest(format!("token:{device_id}")),
+        random_token_hash(),
         report.observed_at.clone(),
-        report.observed_at.clone(),
+        received_at,
     );
-    store.enroll_device(&device)?;
-    for asset in &report.assets {
-        store.upsert_asset(&device_id, asset, &report.observed_at)?;
-    }
-    Ok(())
+    Ok(store.ingest_scan(&device, report, true)?)
 }
 
 /// Execute the `edgedisco scan` command.
 pub fn run_scan(args: &ScanArgs) -> Result<(), Box<dyn std::error::Error>> {
     let report = generate_scan_report()?;
-    if let Some(database_path) = &args.db {
-        persist_scan_report(database_path, &report)?;
+    let database_path = args
+        .db
+        .clone()
+        .or_else(|| args.persist.then(|| default_database_path(None, None)));
+    if let Some(database_path) = database_path {
+        persist_scan_report(&database_path, &report)?;
     }
     if args.pretty {
         println!("{}", serde_json::to_string_pretty(&report)?);

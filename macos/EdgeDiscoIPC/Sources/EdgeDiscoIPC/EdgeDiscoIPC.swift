@@ -118,6 +118,7 @@ public struct DetectionsResult: Codable, Equatable, Sendable {
 }
 
 public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
     public let kind: String
     public let name: String
     public let vendor: String
@@ -126,11 +127,8 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     public let present: Bool?
     public let lastSeen: String?
 
-    public var id: String {
-        [kind, name, vendor, version ?? "", lastSeen ?? ""].joined(separator: "\u{1f}")
-    }
-
     public init(
+        id: String = UUID().uuidString,
         kind: String,
         name: String,
         vendor: String,
@@ -139,6 +137,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
         present: Bool?,
         lastSeen: String?
     ) {
+        self.id = id
         self.kind = kind
         self.name = name
         self.vendor = vendor
@@ -149,6 +148,7 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case id
         case kind
         case name
         case vendor
@@ -156,6 +156,28 @@ public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
         case running
         case present
         case lastSeen = "last_seen"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        kind = try values.decode(String.self, forKey: .kind)
+        name = try values.decode(String.self, forKey: .name)
+        vendor = try values.decode(String.self, forKey: .vendor)
+        version = try values.decodeIfPresent(String.self, forKey: .version)
+        running = try values.decode(Bool.self, forKey: .running)
+        present = try values.decodeIfPresent(Bool.self, forKey: .present)
+        lastSeen = try values.decodeIfPresent(String.self, forKey: .lastSeen)
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind
+            && lhs.name == rhs.name
+            && lhs.vendor == rhs.vendor
+            && lhs.version == rhs.version
+            && lhs.running == rhs.running
+            && lhs.present == rhs.present
+            && lhs.lastSeen == rhs.lastSeen
     }
 }
 

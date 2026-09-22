@@ -81,7 +81,7 @@ def test_launchd_plists_are_valid_and_separate_privileges():
     assert daemon["StandardErrorPath"] == f"{DATA_ROOT}/logs/daemon.error.log"
 
     assert agent["Label"] == "com.edgedisco.agent"
-    assert agent["ProgramArguments"] == [BINARY_PATH, "scan"]
+    assert agent["ProgramArguments"] == [BINARY_PATH, "scan", "--persist"]
     assert agent["RunAtLoad"] is True
     assert agent["StartInterval"] == 60
     assert "KeepAlive" not in agent
@@ -313,6 +313,7 @@ def test_release_preflight_fails_closed_and_plan_is_non_mutating(tmp_path: Path)
     }
     configured = run(RELEASE, "--plan", real_package, env=release_env)
     assert "codesign" in configured.stdout
+    assert "EdgeDisco.app" in configured.stdout
     assert "productbuild" in configured.stdout
     assert "notarytool submit" in configured.stdout
     assert "stapler staple" in configured.stdout

@@ -52,6 +52,14 @@ else
     STAGED=0
 fi
 
+if [ "$STAGED" -eq 1 ] && [ -d "$ROOT/var/run" ]; then
+    socket_parent=$(CDPATH= cd "$ROOT/var/run" && pwd -P)
+    case "$socket_parent/" in
+        "$ROOT"/*) ;;
+        *) printf 'refusing socket path outside staged root: %s\n' "$socket_parent" >&2; exit 65 ;;
+    esac
+fi
+
 for protected_path in \
     "$ROOT/Applications" \
     "$ROOT/Applications/EdgeDisco.app" \
@@ -77,8 +85,6 @@ for protected_path in \
     "$ROOT/usr/local/libexec" \
     "$ROOT/usr/local/libexec/edgedisco" \
     "$ROOT/usr/local/libexec/edgedisco/edgedisco" \
-    "$ROOT/var" \
-    "$ROOT/var/run" \
     "$ROOT/var/run/edgedisco.sock"
 do
     if [ -L "$protected_path" ]; then

@@ -63,7 +63,7 @@ fn test_resolve_service_labels() {
         resolve_service_labels(&["otlp-export", "SERVER"]).expect("resolve aliases");
     assert_eq!(resolved_aliases, vec![EXPORTER_LABEL, SERVER_LABEL]);
 
-    let all = resolve_service_labels(&[] as &[&str]).expect("resolve default all");
+    let all = resolve_service_labels(&[] as &[&str]).expect("resolve empty list");
     assert_eq!(all, SERVICE_LABELS.to_vec());
 }
 
@@ -170,4 +170,25 @@ fn test_privileged_root_flag_requires_root_privileges() {
         }
         _ => panic!("expected PrivilegeRequired error"),
     }
+}
+
+#[test]
+fn test_default_scope_targets_packaged_daemon_or_user_agent() {
+    let root_log = Arc::new(Mutex::new(Vec::new()));
+    let root_manager = ServiceManager::with_executor(Box::new(MockServiceExecutor {
+        executed_commands: Arc::clone(&root_log),
+    }));
+    root_manager
+        .start(&[] as &[&str], true)
+        .expect("start default root service");
+    assert_eq!(root_log.lock().unwrap()[0].1, SERVER_LABEL);
+
+    let user_log = Arc::new(Mutex::new(Vec::new()));
+    let user_manager = ServiceManager::with_executor(Box::new(MockServiceExecutor {
+        executed_commands: Arc::clone(&user_log),
+    }));
+    user_manager
+        .start(&[] as &[&str], false)
+        .expect("start default user service");
+    assert_eq!(user_log.lock().unwrap()[0].1, AGENT_LABEL);
 }

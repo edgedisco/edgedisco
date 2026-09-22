@@ -55,6 +55,37 @@ fn test_downgrade_prevention() {
 }
 
 #[test]
+fn test_version_three_database_adds_presence_column_before_advancing_version() {
+    let dir = tempdir().expect("temp dir");
+    let db_path = dir.path().join("v3.db");
+    drop(Store::open(&db_path).expect("create current store"));
+    {
+        let conn = Connection::open(&db_path).expect("open raw conn");
+        conn.execute_batch("ALTER TABLE assets DROP COLUMN present; PRAGMA user_version = 3;")
+            .expect("simulate v3 store");
+    }
+
+    let store = Store::open(&db_path).expect("migrate v3 store");
+    assert!(store
+        .list_assets(None, None, false, 10)
+        .expect("query migrated assets")
+        .is_empty());
+    let conn = Connection::open(&db_path).expect("inspect migrated database");
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(assets)")
+        .expect("prepare table info")
+        .query_map([], |row| row.get(1))
+        .expect("query columns")
+        .collect::<Result<_, _>>()
+        .expect("collect columns");
+    assert!(columns.contains(&"present".to_string()));
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read version");
+    assert_eq!(version, DATABASE_VERSION);
+}
+
+#[test]
 fn test_foreign_key_enforcement() {
     let store = Store::open_in_memory().expect("open store");
 
@@ -288,4 +319,46 @@ fn test_outbox_claiming_and_leasing() {
 
     let retry_list = store.list_outbox(Some("retry"), 10).expect("list retry");
     assert_eq!(retry_list.len(), 2);
+}
+
+#[test]
+fn test_expired_outbox_lease_is_recovered() {
+    let store = Store::open_in_memory().expect("open store");
+    let record = OutboxRecord::new(
+        "expired-1",
+        "asset-expired",
+        "{}",
+        2,
+        "2026-09-22T00:00:00Z",
+        "2026-09-22T00:00:00Z",
+    );
+    store.insert_outbox(&record).expect("insert record");
+    let first = store
+        .claim_outbox(
+            10,
+            1024,
+            "lease-old",
+            "2026-09-22T00:01:00Z",
+            "2026-09-22T00:00:00Z",
+        )
+        .expect("first claim");
+    assert_eq!(first.len(), 1);
+
+    let recovered = store
+        .claim_outbox(
+            10,
+            1024,
+            "lease-new",
+            "2026-09-22T00:03:00Z",
+            "2026-09-22T00:02:00Z",
+        )
+        .expect("recover expired claim");
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].id, "expired-1");
+    assert_eq!(recovered[0].lease_id.as_deref(), Some("lease-new"));
+    assert_eq!(recovered[0].attempt_count, 0);
+    assert_eq!(
+        recovered[0].last_error_code.as_deref(),
+        Some("lease_expired")
+    );
 }

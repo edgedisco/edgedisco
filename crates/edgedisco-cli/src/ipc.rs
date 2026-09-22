@@ -250,6 +250,7 @@ impl IpcResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SanitizedDetection {
+    pub id: String,
     pub kind: String,
     pub name: String,
     pub vendor: String,
@@ -537,6 +538,10 @@ fn detections_result(store: &Store) -> Result<Value, String> {
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|asset| SanitizedDetection {
+            id: edgedisco_core::redaction::sha256_digest(format!(
+                "detection:{}",
+                asset.fingerprint
+            )),
             kind: asset.kind,
             name: asset.name,
             vendor: asset.vendor,
@@ -557,8 +562,9 @@ fn prepare_socket_path(config: &IpcConfig) -> Result<(), IpcError> {
             path: config.socket_path.clone(),
             reason: "socket path has no parent directory".into(),
         })?;
+    let parent_existed = parent.exists();
     std::fs::create_dir_all(parent)?;
-    if config.private_parent {
+    if config.private_parent && !parent_existed {
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
     }
 

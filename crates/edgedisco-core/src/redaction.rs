@@ -1,4 +1,5 @@
 use crate::models::{Asset, Device, ScanReport};
+use chrono::{DateTime, SecondsFormat};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -66,17 +67,9 @@ pub fn validate_timestamp(value: &str) -> Result<String, RedactionError> {
     if value.is_empty() || value.len() > 64 {
         return Err(RedactionError::InvalidTimestamp(value.to_string()));
     }
-    // Check if timezone is present (either 'Z', '+', or '-')
-    if !value.contains('Z')
-        && !value.contains('z')
-        && !value.contains('+')
-        && !value[10..].contains('-')
-    {
-        return Err(RedactionError::InvalidTimestamp(
-            "missing timezone".to_string(),
-        ));
-    }
-    Ok(value.to_string())
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+        .map_err(|_| RedactionError::InvalidTimestamp(value.to_string()))
 }
 
 /// Locate only the module, script, package, or image token of a runtime command.

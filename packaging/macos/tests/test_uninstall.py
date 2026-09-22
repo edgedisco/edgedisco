@@ -195,3 +195,17 @@ def test_staged_root_must_be_absolute_canonical_directory(tmp_path: Path):
     linked = run_uninstall(linked_root)
     assert linked.returncode == 64
     assert "canonical" in linked.stderr.lower() or "symlink" in linked.stderr.lower()
+
+
+def test_standard_macos_var_symlink_does_not_block_uninstall(tmp_path: Path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "private/var/run").mkdir(parents=True)
+    (root / "var").symlink_to("private/var", target_is_directory=True)
+    socket = root / "private/var/run/edgedisco.sock"
+    socket.write_bytes(b"socket fixture")
+
+    result = run_uninstall(root)
+
+    assert result.returncode == 0, result.stderr
+    assert not socket.exists()
