@@ -29,6 +29,7 @@ The platform guides own the commands for managed installations. Component refere
 
 ## Plans
 
+- [Native Rust core engine specification](rust-core-engine-spec.md): modular Cargo workspace, cross-platform process scanning, SQLite store, and CLI architecture.
 - [Container and VM discovery roadmap](container-vm-discovery-roadmap.md): planned container and virtual-machine evidence levels.
 - [Native macOS enterprise roadmap](native-macos-enterprise-roadmap.md): enterprise MDM architecture, signed .pkg distribution, privilege separation, and native Swift status item UI.
 

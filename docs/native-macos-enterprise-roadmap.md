@@ -115,11 +115,12 @@ This split establishes the blueprint across all supported endpoint operating sys
 
 ### Dimension C: Core engine runtime
 
-| Option | Technology | Binary Size | Memory Footprint | Engineering Effort |
-| --- | --- | --- | --- | --- |
-| **Option 1: Bundled Python Mach-O** *(Recommended Phase 1)* | Bundle existing engine with `PyInstaller` or `python-build-standalone` into Mach-O executable. | ~45–60 MB | ~40–50 MB idle | Low: 100% reuse of existing detection catalog, fingerprint library, and OTLP encoders. |
-| **Option 2: Compiled Go or Rust Daemon** | Port collector loop, process scanning, and OTLP pipeline to a compiled native binary. | ~10–15 MB | 8–12 MB idle | Medium: Requires re-implementing process scanner and OTLP proto serialization in Go/Rust. |
-| **Option 3: Pure Swift Daemon** | Native Swift daemon using Darwin APIs (`libproc`, `sysctl`, `NSWorkspace`, XPC). | ~12–18 MB | 10–15 MB idle | High: Rewriting entire detection catalog in Swift; unified Swift codebase across UI and daemon. |
+| Option | Technology | Binary Size | Memory Footprint | Engineering Effort | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| **Option 1: Compiled Native Rust Daemon** *(Adopted)* | Native Rust binary with direct Darwin/Win32/Linux OS bindings. | ~8–12 MB | **4–8 MB idle** | Moderate | **Selected:** Zero runtime, zero GC spikes, immune to enterprise EDR heuristic quarantine, peak memory safety for root services. |
+| **Option 2: Compiled Go Daemon** | Native Go daemon with built-in networking and runtime GC. | ~12–18 MB | 15–25 MB idle | Low | Solid alternative, but higher memory footprint and GC runtime overhead in root daemons. |
+| **Option 3: Bundled Python Mach-O** *(Legacy Prototype)* | Bundle Python with PyInstaller / standalone interpreter. | ~45–60 MB | ~40–50 MB idle | Low initial | High packaging debt, slow startup, and frequent enterprise EDR/AV quarantine issues. |
+| **Option 4: Pure Swift Daemon** | Native Swift daemon using Darwin APIs. | ~12–18 MB | 10–15 MB idle | High | macOS-only; breaks cross-platform engine parity with Linux and Windows. |
 
 ---
 
@@ -238,24 +239,29 @@ Supported MDM payload keys:
 
 ## 9. Implementation roadmap
 
-### Phase 1: Self-contained engine bundling & LaunchDaemon packaging
-- Package the existing Python engine into a self-contained Mach-O bundle using `PyInstaller` or `python-build-standalone`, eliminating external interpreter dependencies.
-- Split system daemon (`com.edgedisco.daemon`) and user session collector (`com.edgedisco.agent`).
-- Author flat `.pkg` with `postinstall` script and test silent installation via `sudo installer -pkg EdgeDisco.pkg -target /`.
-- Wire Developer ID signing and notarization automation into CI.
+### Phase 1: Native Rust core engine & process scanner
+- Author Rust workspace (`crates/edgedisco-core`, `crates/edgedisco-cli`).
+- Implement cross-platform process discovery (Darwin `libproc`, Linux `/proc`, Windows toolhelp).
+- Implement detection catalog, fingerprint library, and SQLite local datastore.
+- Ship standalone `edgedisco` CLI (`scan`, `status`, `start`, `stop`, `restart`).
 
-### Phase 2: Native Swift menu bar application
+### Phase 2: LaunchDaemon packaging & signed `.pkg` installer
+- Author flat `.pkg` with `postinstall` script deploying the compiled native Mach-O binary.
+- Split system daemon (`com.edgedisco.daemon`) and user session collector (`com.edgedisco.agent`).
+- Wire Apple Developer ID binary signing, package signing, and Notary Service automation into CI.
+
+### Phase 3: Native Swift menu bar application
 - Implement lightweight AppKit `NSStatusItem` project in Swift.
-- Establish authenticated local IPC between the menu bar app and the local daemon (Unix domain socket or loopback HTTP token).
+- Establish authenticated local IPC between the menu bar app and the native Rust daemon (Unix domain socket or loopback HTTP token).
 - Implement dynamic status icons (healthy, syncing, warning) and menu actions (dashboard launch, scan trigger).
 - Package `EdgeDisco.app` containing the menu bar executable and helper binaries.
 
-### Phase 3: MDM managed preferences & policy enforcement
+### Phase 4: MDM managed preferences & policy enforcement
 - Implement Managed Preferences parser reading `/Library/Managed Preferences/com.edgedisco.agent.plist`.
 - Ship a downloadable reference `.mobileconfig` profile for Jamf Pro, Kandji, and Intune distribution.
 - Support enterprise policy keys (central server URL, enrollment tokens, OTLP endpoint/headers, adapter filtering).
 
-### Phase 4: Enterprise fleet cloud integration & validation
+### Phase 5: Enterprise fleet cloud integration & validation
 - Validate telemetry delivery and outbox synchronization against the central EdgeDisco Cloud service.
 - Verify that central cloud network MCP server (Streamable-HTTP / SSE) queries fleet inventory reported by macOS endpoints.
 - Test silent MDM installation, upgrade, and uninstallation across clean macOS 13, 14, and 15 machines.
