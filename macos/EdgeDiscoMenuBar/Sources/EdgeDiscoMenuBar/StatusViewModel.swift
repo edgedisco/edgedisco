@@ -9,7 +9,7 @@ enum StatusPresentationState: Equatable {
     case protocolError(String)
 }
 
-enum InventoryScope: String, CaseIterable, Identifiable {
+enum InventoryScope: String, CaseIterable, Identifiable, Sendable {
     case user = "My Session"
     case system = "This Mac"
     var id: String { rawValue }

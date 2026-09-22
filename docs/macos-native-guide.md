@@ -59,8 +59,10 @@ Previously loaded records are explicitly marked potentially stale if refresh fai
 Existing installations need the updated package to replace the scheduled user
 collector with the persistent daemon. Before that upgrade, My Session can report
 unavailable even while This Mac works. Closing the inventory window keeps the
-menu-bar app running. The inventory window offers Products (catalog-matched
-findings grouped within the selected scope) and Evidence (individual records).
+menu-bar app running. Its Overview tab reads both scopes and shows partial results
+explicitly if one daemon is unavailable. Scope Details offers Products
+(catalog-matched findings grouped within the selected scope) and Evidence
+(individual records).
 The Settings window can update My Session's scan interval and basic OTLP options
 without restarting. This Mac settings remain read-only there; the instructions
 below configure the system daemon.

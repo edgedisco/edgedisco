@@ -69,7 +69,14 @@ final class StatusItemManager: NSObject {
             )
             window.title = "EdgeDisco Inventory"
             window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: DetectionsListView(viewModel: viewModel))
+            window.contentViewController = NSHostingController(rootView:
+                TabView {
+                    InventoryOverviewView()
+                        .tabItem { Label("Overview", systemImage: "square.grid.2x2") }
+                    DetectionsListView(viewModel: viewModel)
+                        .tabItem { Label("Scope Details", systemImage: "list.bullet") }
+                }
+            )
             window.center()
             inventoryWindow = window
         }
