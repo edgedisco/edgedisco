@@ -4,7 +4,8 @@ The main [README](../README.md) is the product overview and quick start. This in
 
 ## Install and operate
 
-- [macOS installation and operation](deployment-macos.md): prerequisites, installation, verification, upgrades, MCP, OTLP, services, logs, and removal.
+- [macOS installation and operation](deployment-macos.md): legacy per-user Python installation, verification, upgrades, MCP, OTLP, services, logs, and removal.
+- [Native macOS enterprise package](macos-enterprise-package.md): Rust-only LaunchDaemon/LaunchAgent package build, inspection, lifecycle, signing preflight, upgrade, and rollback.
 - [Linux and WSL installation and operation](deployment-linux.md): prerequisites, installation, verification, upgrades, MCP, OTLP, systemd services, logs, and removal.
 
 The platform guides own the commands for managed installations. Component references link back to those guides for routine setup.

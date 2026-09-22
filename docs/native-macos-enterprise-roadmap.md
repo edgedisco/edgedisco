@@ -147,48 +147,41 @@ The user interface follows the lightweight model:
 
 ## 6. Packaging & deployment (.pkg vs .app)
 
-### Deliverable format: Signed `.pkg` installer
+### Deliverable format: native flat `.pkg`
 
-Enterprise MDM systems cannot deploy bare `.app` bundles silently and reliably. Distribution requires a signed, notarized flat component package (`.pkg`).
+Phase 2 ships a native Rust-only flat package. Local builds are deliberately unsigned; the release path signs the executable and installer and notarizes the resulting package only when explicit credentials are supplied. The Swift menu-bar application remains a later phase and is not present in this package.
 
 ```text
-EdgeDisco-<version>.pkg
+EdgeDisco-<version>-unsigned.pkg
 ├── Distribution
-├── Component Package (payload: /Applications/EdgeDisco.app)
-└── Scripts
-    ├── preinstall
-    └── postinstall
+├── EdgeDisco.pkg
+│   ├── Payload
+│   │   ├── usr/local/libexec/edgedisco/edgedisco
+│   │   ├── Library/LaunchDaemons/com.edgedisco.daemon.plist
+│   │   └── Library/LaunchAgents/com.edgedisco.agent.plist
+│   └── Scripts
+│       ├── preinstall
+│       └── postinstall
 ```
 
 ### Filesystem layout
 
-- `/Applications/EdgeDisco.app`:
-  - `Contents/MacOS/EdgeDisco`: Native menu bar binary.
-  - `Contents/Helpers/edgedisco-core`: Core engine executable (bundled Python standalone or compiled binary).
-  - `Contents/Library/LaunchDaemons/com.edgedisco.daemon.plist`: System daemon configuration.
-  - `Contents/Library/LaunchAgents/com.edgedisco.agent.plist`: Per-user agent configuration.
-  - `Contents/Resources/`: Icons, assets, and web dashboard bundle.
+- `/usr/local/libexec/edgedisco/edgedisco`: the compiled native Rust engine reused by both services.
 - `/Library/Application Support/EdgeDisco/`:
-  - `data/`: Central local SQLite database (`inventory.db`) and OTLP outbox buffer with restricted permissions (`0700`/`0750` root/service only; no unauthenticated local reads).
-  - `logs/`: System daemon logs.
-  - `config/`: System-wide environment overrides and enrollment keys.
-- `/Library/LaunchDaemons/com.edgedisco.daemon.plist`: Symlinked or copied by `postinstall`.
-- `/Library/LaunchAgents/com.edgedisco.agent.plist`: Symlinked or copied by `postinstall`.
+  - `data/`: preserved central SQLite inventory and OTLP outbox state (`0700`).
+  - `logs/`: root-daemon logs (`0750`).
+  - `config/`: future system-wide configuration (`0750`); no credentials are packaged.
+- `/Library/LaunchDaemons/com.edgedisco.daemon.plist`: root system daemon using the enterprise database and `/var/run/edgedisco.sock`.
+- `/Library/LaunchAgents/com.edgedisco.agent.plist`: finite per-user collector using only the login user's default database path.
+
+The canonical labels are `com.edgedisco.daemon` and `com.edgedisco.agent`. The payload contains no Python runtime, app/web assets, endpoint HTTP or MCP server, secrets, signing identity, or notarization profile. See [Native macOS enterprise package](macos-enterprise-package.md) for exact modes, build and inspection commands, signing preflight, upgrades, and rollback.
 
 ### Installer script lifecycle
 
-1. **`preinstall`:**
-   - Detects existing installations.
-   - Quiesces active services via `launchctl bootout`.
-   - Backs up existing database state if an upgrade is in progress.
-2. **`postinstall`:**
-   - Sets secure file permissions (`chown -R root:wheel /Applications/EdgeDisco.app`).
-   - Ensures `/Library/Application Support/EdgeDisco` exists with restricted mode (`0750`).
-   - Reads any MDM pre-stage configuration from `/Library/Managed Preferences/com.edgedisco.plist`.
-   - Registers and starts the LaunchDaemon:
-     ```bash
-     launchctl bootstrap system /Library/LaunchDaemons/com.edgedisco.daemon.plist
-     ```
+1. **`preinstall`:** quiesces only the two canonical EdgeDisco labels. Missing services are harmless; it does not broadly kill processes, remove files, or copy runtime state.
+2. **`postinstall`:** validates payload files, creates package-owned directories with least-privilege modes, leaves existing database/outbox files untouched, bootstraps the LaunchDaemon, and then bootstraps the current GUI LaunchAgent when a login session exists.
+
+Both scripts are repeatable. Their staged-root mode supports integration tests without root, `/Library` writes, package installation, or active launchd mutation.
 
 ---
 

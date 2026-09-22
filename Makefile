@@ -1,4 +1,4 @@
-.PHONY: test check build clean
+.PHONY: test check build clean macos-pkg
 
 # Prefer the checkout's virtual environment without requiring activation.
 # Override explicitly when validating another interpreter, for example:
@@ -20,6 +20,11 @@ check: test
 
 build: check
 	$(PYTHON) -m pip wheel . --no-deps --no-build-isolation -w dist
+
+export VERSION
+macos-pkg:
+	@test -n "$${VERSION:-}" || (printf '%s\n' 'VERSION is required (example: make macos-pkg VERSION=0.1.0)' >&2; exit 64)
+	./packaging/macos/build-pkg.sh "$$VERSION"
 
 clean:
 	$(PYTHON) -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__')]; [shutil.rmtree(p) for p in pathlib.Path('.').glob('build')]; [shutil.rmtree(p) for p in pathlib.Path('src').glob('*.egg-info')]"

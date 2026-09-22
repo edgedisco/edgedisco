@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.edgedisco.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/libexec/edgedisco/edgedisco</string>
+    <string>daemon</string>
+    <string>--interval</string>
+    <string>60</string>
+    <string>--db</string>
+    <string>/Library/Application Support/EdgeDisco/data/inventory.db</string>
+    <string>--ipc-mode</string>
+    <string>system</string>
+    <string>--ipc-socket</string>
+    <string>/var/run/edgedisco.sock</string>
+    <string>--ipc-allowed-uid</string>
+    <string>0</string>
+    <string>--ipc-owner-uid</string>
+    <string>0</string>
+    <string>--ipc-group-gid</string>
+    <string>0</string>
+  </array>
+  <key>UserName</key>
+  <string>root</string>
+  <key>GroupName</key>
+  <string>wheel</string>
+  <key>WorkingDirectory</key>
+  <string>/Library/Application Support/EdgeDisco</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/Application Support/EdgeDisco/logs/daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/Application Support/EdgeDisco/logs/daemon.error.log</string>
+</dict>
+</plist>
