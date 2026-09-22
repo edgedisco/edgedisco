@@ -70,7 +70,9 @@ The Settings window can update My Session's scan interval and basic OTLP options
 without restarting. This Mac settings remain read-only there; the instructions
 below configure the system daemon.
 Native scans also include catalog-matched app bundles directly in `/Applications`
-and `~/Applications`; this first app slice does not read bundle versions.
+and `~/Applications`. The scanner reads bounded, non-symlinked `Info.plist` data
+for app versions, preferring `CFBundleShortVersionString` and falling back to
+`CFBundleVersion`. An unreadable or invalid plist leaves the version unknown.
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 

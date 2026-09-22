@@ -101,9 +101,12 @@ system settings still require administrator-managed configuration and restart.
   overlap. Unknown findings with coincident IDs across scopes remain separate.
 - Added a bounded macOS app-bundle slice: direct `.app` names in `/Applications`
   and the user's Applications folder are matched to exact catalog names/aliases.
-  Symlinks and nested folders are skipped; bundle metadata and versions are not
-  read yet. This is narrower than Python's installed-app inventory.
-- Remaining: richer app metadata, editor-extension/MCP collectors,
+  Symlinks and nested folders are skipped. The native scanner now reads at most
+  256 KiB of `Contents/Info.plist` through no-follow directory handles and uses
+  `CFBundleShortVersionString`, then `CFBundleVersion`, for XML or binary plists.
+  Invalid, oversized, or linked metadata leaves the version unknown without
+  hiding the detected app. This remains narrower than Python's installed-app inventory.
+- Remaining: executable fingerprint evidence, editor-extension/MCP collectors,
   interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.

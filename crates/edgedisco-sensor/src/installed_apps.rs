@@ -50,6 +50,10 @@ pub fn scan_installed_apps_in(roots: &[PathBuf]) -> Vec<Asset> {
                 false,
             );
             asset.path_hash = Some(path_hash);
+            #[cfg(target_os = "macos")]
+            {
+                asset.version = read_bundle_version(root, &path);
+            }
             asset.metadata.insert(
                 "package".into(),
                 path.file_name()
@@ -71,6 +75,82 @@ pub fn scan_installed_apps_in(roots: &[PathBuf]) -> Vec<Asset> {
 
 fn is_real_directory(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+#[cfg(target_os = "macos")]
+fn read_bundle_version(root: &Path, bundle: &Path) -> Option<String> {
+    use std::ffi::OsStr;
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::process::{Command, Stdio};
+
+    const MAX_PLIST_BYTES: u64 = 256 * 1024;
+
+    // Open each path component relative to its already-open parent. A symlink
+    // replacement at any component cannot redirect the read outside the root.
+    let root_dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(root)
+        .ok()?;
+    let bundle_dir = open_child(&root_dir, bundle.file_name()?, libc::O_DIRECTORY)?;
+    let contents_dir = open_child(&bundle_dir, OsStr::new("Contents"), libc::O_DIRECTORY)?;
+    let mut info = open_child(&contents_dir, OsStr::new("Info.plist"), libc::O_NONBLOCK)?;
+    let metadata = info.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_PLIST_BYTES {
+        return None;
+    }
+    let mut plist = Vec::new();
+    Read::by_ref(&mut info)
+        .take(MAX_PLIST_BYTES + 1)
+        .read_to_end(&mut plist)
+        .ok()?;
+    if plist.len() as u64 > MAX_PLIST_BYTES {
+        return None;
+    }
+
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+        let mut child = Command::new("/usr/bin/plutil")
+            .args([
+                "-extract", key, "raw", "-expect", "string", "-n", "-o", "-", "-",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(&plist).ok()?;
+        let output = child.wait_with_output().ok()?;
+        if output.status.success() {
+            let version = std::str::from_utf8(&output.stdout).ok()?.trim();
+            if !version.is_empty() && version.len() <= 128 && !version.chars().any(char::is_control)
+            {
+                return Some(version.to_owned());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn open_child(parent: &std::fs::File, name: &std::ffi::OsStr, flags: i32) -> Option<std::fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let name = CString::new(name.as_bytes()).ok()?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | flags,
+        )
+    };
+    if fd < 0 {
+        None
+    } else {
+        Some(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
 }
 
 fn classify_bundle_name(stem: &str) -> Option<(&'static str, &'static str)> {

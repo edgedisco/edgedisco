@@ -70,3 +70,85 @@ fn symlinked_root_and_bundle_are_not_followed() {
     symlink(private, &linked_root).unwrap();
     assert!(scan_installed_apps_in(&[linked_root]).is_empty());
 }
+
+#[cfg(target_os = "macos")]
+fn info_plist(
+    root: &Path,
+    app: &str,
+    short: Option<&str>,
+    build: Option<&str>,
+) -> std::path::PathBuf {
+    let contents = root.join(format!("{app}.app/Contents"));
+    std::fs::create_dir_all(&contents).unwrap();
+    let mut fields = String::new();
+    if let Some(value) = short {
+        fields.push_str(&format!(
+            "<key>CFBundleShortVersionString</key><string>{value}</string>"
+        ));
+    }
+    if let Some(value) = build {
+        fields.push_str(&format!(
+            "<key>CFBundleVersion</key><string>{value}</string>"
+        ));
+    }
+    let info = contents.join("Info.plist");
+    std::fs::write(&info, format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>{fields}</dict></plist>")).unwrap();
+    info
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reads_short_version_then_falls_back_to_build_version_for_xml_and_binary_plists() {
+    let temp = tempdir().unwrap();
+    let apps = temp.path().join("Applications");
+    std::fs::create_dir(&apps).unwrap();
+    info_plist(&apps, "Cursor", Some("1.2.3"), Some("456"));
+    info_plist(&apps, "Kiro", None, Some("789"));
+    let binary_info = info_plist(&apps, "Goose", Some("2.0"), None);
+    assert!(std::process::Command::new("/usr/bin/plutil")
+        .args(["-convert", "binary1", "-o"])
+        .arg(&binary_info)
+        .arg(&binary_info)
+        .status()
+        .unwrap()
+        .success());
+
+    let assets = scan_installed_apps_in(&[apps]);
+    let version = |name: &str| {
+        assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .unwrap()
+            .version
+            .as_deref()
+    };
+    assert_eq!(version("Cursor"), Some("1.2.3"));
+    assert_eq!(version("Kiro IDE"), Some("789"));
+    assert_eq!(version("Goose"), Some("2.0"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn rejects_symlinked_and_oversized_bundle_metadata_without_losing_detection() {
+    use std::os::unix::fs::symlink;
+    let temp = tempdir().unwrap();
+    let apps = temp.path().join("Applications");
+    let private = temp.path().join("Private");
+    std::fs::create_dir(&apps).unwrap();
+    std::fs::create_dir(&private).unwrap();
+    let private_info = info_plist(&private, "Cursor", Some("secret"), None);
+
+    let linked_contents = apps.join("Cursor.app/Contents");
+    std::fs::create_dir(apps.join("Cursor.app")).unwrap();
+    symlink(private_info.parent().unwrap(), &linked_contents).unwrap();
+    let linked_info = apps.join("Kiro.app/Contents/Info.plist");
+    std::fs::create_dir_all(linked_info.parent().unwrap()).unwrap();
+    symlink(&private_info, &linked_info).unwrap();
+    let large_info = apps.join("Goose.app/Contents/Info.plist");
+    std::fs::create_dir_all(large_info.parent().unwrap()).unwrap();
+    std::fs::write(&large_info, vec![b'x'; 256 * 1024 + 1]).unwrap();
+
+    let assets = scan_installed_apps_in(&[apps]);
+    assert_eq!(assets.len(), 3);
+    assert!(assets.iter().all(|asset| asset.version.is_none()));
+}
