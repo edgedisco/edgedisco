@@ -5,7 +5,9 @@ use crate::util::{
 };
 use edgedisco_core::models::{Asset, Device, DeviceReport, PrivacyFlags, ScanReport};
 use edgedisco_core::store::Store;
-use edgedisco_sensor::{scan_available_containers, scan_host_processes, scan_processes};
+use edgedisco_sensor::{
+    scan_available_containers, scan_host_processes, scan_installed_clis, scan_processes,
+};
 use std::collections::HashSet;
 use std::path::Path;
 use uuid::Uuid;
@@ -19,11 +21,11 @@ pub fn combine_discovery_assets(host: Vec<Asset>, containers: Vec<Asset>) -> Vec
         .collect()
 }
 
-/// Run native process and local container observation, then build a ScanReport.
+/// Merge installed CLI inventory, native processes, and local containers into a report.
 pub fn generate_scan_report() -> Result<ScanReport, Box<dyn std::error::Error>> {
     let observations = scan_host_processes()?;
-    let mut assets =
-        combine_discovery_assets(scan_processes(&observations), scan_available_containers());
+    let host = combine_discovery_assets(scan_processes(&observations), scan_installed_clis());
+    let mut assets = combine_discovery_assets(host, scan_available_containers());
     for asset in &mut assets {
         asset.present = None;
     }

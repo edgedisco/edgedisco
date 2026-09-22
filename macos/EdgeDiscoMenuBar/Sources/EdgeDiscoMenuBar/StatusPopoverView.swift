@@ -9,7 +9,7 @@ extension SanitizedDetection {
 struct StatusPopoverView: View {
     @ObservedObject var viewModel: StatusViewModel
     let quitAction: () -> Void
-    @State private var isShowingDetections = false
+    let openInventory: () -> Void
 
     private var buildMetadata: [(String, String)] {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -38,6 +38,7 @@ struct StatusPopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            InventoryScopePicker(viewModel: viewModel)
             HStack(spacing: 8) {
                 Circle()
                     .fill(viewModel.isHealthy ? Color.green : Color.orange)
@@ -57,7 +58,7 @@ struct StatusPopoverView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
-                    Text("Assets").foregroundStyle(.secondary)
+                    Text("Last scan findings").foregroundStyle(.secondary)
                     Text("\(viewModel.assetCount)")
                         .monospacedDigit()
                         .fontWeight(.medium)
@@ -106,10 +107,7 @@ struct StatusPopoverView: View {
                 }
                 .disabled(viewModel.isScanning)
 
-                Button("View Detections") {
-                    isShowingDetections = true
-                    Task { await viewModel.loadDetections() }
-                }
+                Button("Open Inventory", action: openInventory)
             }
 
             Divider()
@@ -122,47 +120,69 @@ struct StatusPopoverView: View {
         }
         .padding(14)
         .frame(width: 290)
-        .sheet(isPresented: $isShowingDetections) {
-            DetectionsListView(viewModel: viewModel)
-        }
     }
 }
 
 struct DetectionsListView: View {
     @ObservedObject var viewModel: StatusViewModel
-    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+    @State private var filter = "All"
+    private var visible: [SanitizedDetection] {
+        viewModel.detections.filter {
+            (search.isEmpty || "\($0.name) \($0.vendor) \($0.kind)".localizedCaseInsensitiveContains(search))
+            && (filter == "All" || (filter == "Running" && $0.running)
+                || (filter == "Installed" && $0.kind == "application" && $0.present != false)
+                || (filter == "Previously seen" && $0.present == false))
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Detected AI Tools")
+                Text("Inventory — \(viewModel.scope.rawValue)")
                     .font(.headline)
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Refresh") { Task { await viewModel.loadDetections() } }
+                    .disabled(viewModel.isLoadingDetections)
+                Button(viewModel.isScanning ? "Scanning…" : "Scan Now") {
+                    Task { await viewModel.scanNow(); await viewModel.loadDetections() }
+                }.disabled(viewModel.isScanning)
             }
+            InventoryScopePicker(viewModel: viewModel)
+            if let error = viewModel.detectionsError {
+                Text(error).foregroundStyle(.orange)
+                Text("Previously loaded findings, if shown, may be stale.").font(.caption)
+            }
+            TextField("Search name, vendor, or type", text: $search)
+                .textFieldStyle(.roundedBorder)
+            Picker("State", selection: $filter) {
+                ForEach(["All", "Installed", "Running", "Previously seen"], id: \.self) { Text($0) }
+            }.pickerStyle(.segmented)
+            Text("\(visible.count) evidence records • A tool may have installation and process records.")
+                .font(.caption).foregroundStyle(.secondary)
 
             if viewModel.isLoadingDetections, viewModel.detections.isEmpty {
                 ProgressView("Loading detections…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.detections.isEmpty {
+            } else if visible.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.largeTitle)
                         .foregroundStyle(.secondary)
-                    Text("No Detections")
+                    Text(viewModel.detectionsError == nil ? "No Matching Detections" : "Inventory Unavailable")
                         .font(.headline)
                     Text("Run a scan to discover AI tools on this Mac.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(viewModel.detections) { detection in
+                List(visible) { detection in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Text(detection.name)
                                 .font(.headline)
                             Spacer()
-                            Text(detection.runningLabel)
+                            Text(detection.present == false ? "Previously seen" : detection.runningLabel)
                                 .font(.caption)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)
@@ -175,6 +195,8 @@ struct DetectionsListView: View {
                         Text([detection.vendor, detection.version].compactMap { $0 }.joined(separator: " · "))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                        Text("Type: \(detection.kind) • Last seen: \(detection.lastSeen ?? "Unknown")")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                     .padding(.vertical, 3)
                 }
@@ -182,6 +204,19 @@ struct DetectionsListView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 420, minHeight: 300)
+        .frame(minWidth: 560, minHeight: 400)
+    }
+}
+
+struct InventoryScopePicker: View {
+    @ObservedObject var viewModel: StatusViewModel
+    var body: some View {
+        Picker("Inventory", selection: $viewModel.scope) {
+            ForEach(InventoryScope.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .disabled(viewModel.isScanning || viewModel.isLoadingDetections)
+        .onChange(of: viewModel.scope) { _ in
+            Task { await viewModel.refresh(); await viewModel.loadDetections() }
+        }
     }
 }

@@ -83,10 +83,11 @@ def test_launchd_plists_are_valid_and_separate_privileges():
     assert daemon["StandardErrorPath"] == f"{DATA_ROOT}/logs/daemon.error.log"
 
     assert agent["Label"] == "com.edgedisco.agent"
-    assert agent["ProgramArguments"] == [BINARY_PATH, "scan", "--persist"]
+    assert agent["ProgramArguments"] == [BINARY_PATH, "daemon", "--interval", "60"]
     assert agent["RunAtLoad"] is True
-    assert agent["StartInterval"] == 60
-    assert "KeepAlive" not in agent
+    assert agent["KeepAlive"] is True
+    assert agent["ThrottleInterval"] == 10
+    assert "StartInterval" not in agent
     assert agent["WorkingDirectory"] == "/"
     assert agent["StandardOutPath"] == "/dev/null"
     assert agent["StandardErrorPath"] == "/dev/null"

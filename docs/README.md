@@ -13,6 +13,8 @@ The platform guides own the commands for managed installations. Component refere
 
 ## Integrations and interfaces
 
+- [Native UI delivery plan](native-ui-delivery-plan.md): discovery parity, user-session visibility, inventory window, settings, and acceptance checks.
+
 - [MCP inventory access](inventory-sync-mcp.md): tool contracts, authentication, pagination, freshness, and manual source setup.
 - [OpenTelemetry integration](otel-integration.md): exporter behavior, configuration reference, payload mapping, delivery semantics, and troubleshooting.
 - [Runtime adapters](runtime-adapters.md): optional local runtime connections and their security boundaries.

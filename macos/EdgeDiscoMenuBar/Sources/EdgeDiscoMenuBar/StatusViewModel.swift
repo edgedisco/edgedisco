@@ -9,6 +9,18 @@ enum StatusPresentationState: Equatable {
     case protocolError(String)
 }
 
+enum InventoryScope: String, CaseIterable, Identifiable {
+    case user = "My Session"
+    case system = "This Mac"
+    var id: String { rawValue }
+    var socketPath: String {
+        switch self {
+        case .user: SocketPathResolver().userPath
+        case .system: SocketPathResolver.systemSocketPath
+        }
+    }
+}
+
 @MainActor
 final class StatusViewModel: ObservableObject {
     typealias StatusFetcher = @Sendable () -> ConnectionState<StatusResult>
@@ -23,17 +35,27 @@ final class StatusViewModel: ObservableObject {
     @Published private(set) var isScanning = false
     @Published private(set) var isLoadingDetections = false
     @Published private(set) var detections: [SanitizedDetection] = []
+    @Published private(set) var detectionsError: String?
+    @Published var scope: InventoryScope = .user {
+        didSet {
+            generation += 1
+            detections = []
+            detectionsError = nil
+            resetUnavailableState(state: .daemonNotRunning, message: "Connecting to \(scope.rawValue)…")
+        }
+    }
+    private var generation = 0
 
-    private let statusFetcher: StatusFetcher
-    private let scanFetcher: ScanFetcher
-    private let detectionsFetcher: DetectionsFetcher
+    private let statusFetcher: StatusFetcher?
+    private let scanFetcher: ScanFetcher?
+    private let detectionsFetcher: DetectionsFetcher?
 
     var isHealthy: Bool { state == .healthy }
 
     init(
-        statusFetcher: @escaping StatusFetcher = { EdgeDiscoClient().status() },
-        scanFetcher: @escaping ScanFetcher = { EdgeDiscoClient().scan() },
-        detectionsFetcher: @escaping DetectionsFetcher = { EdgeDiscoClient().detections() }
+        statusFetcher: StatusFetcher? = nil,
+        scanFetcher: ScanFetcher? = nil,
+        detectionsFetcher: DetectionsFetcher? = nil
     ) {
         self.statusFetcher = statusFetcher
         self.scanFetcher = scanFetcher
@@ -41,10 +63,13 @@ final class StatusViewModel: ObservableObject {
     }
 
     func refresh() async {
-        let statusFetcher = statusFetcher
+        let generation = generation
+        let client = EdgeDiscoClient(socketPath: scope.socketPath)
+        let statusFetcher = statusFetcher ?? { client.status() }
         let connectionState = await Task.detached(priority: .utility) {
             statusFetcher()
         }.value
+        guard generation == self.generation else { return }
         apply(connectionState)
     }
 
@@ -53,10 +78,13 @@ final class StatusViewModel: ObservableObject {
         isScanning = true
         defer { isScanning = false }
 
-        let scanFetcher = scanFetcher
+        let generation = generation
+        let client = EdgeDiscoClient(socketPath: scope.socketPath)
+        let scanFetcher = scanFetcher ?? { client.scan() }
         let result = await Task.detached(priority: .utility) {
             scanFetcher()
         }.value
+        guard generation == self.generation else { return }
         switch result {
         case let .success(scan):
             assetCount = Int(clamping: scan.assetCount)
@@ -73,17 +101,23 @@ final class StatusViewModel: ObservableObject {
         isLoadingDetections = true
         defer { isLoadingDetections = false }
 
-        let detectionsFetcher = detectionsFetcher
+        let generation = generation
+        let client = EdgeDiscoClient(socketPath: scope.socketPath)
+        let detectionsFetcher = detectionsFetcher ?? { client.detections() }
         let result = await Task.detached(priority: .utility) {
             detectionsFetcher()
         }.value
+        guard generation == self.generation else { return }
         switch result {
         case let .success(detections):
             self.detections = detections
+            detectionsError = nil
         case .failure(.daemonNotRunning):
             statusMessage = "Could not load detections: EdgeDisco daemon is not running"
+            detectionsError = statusMessage
         case let .failure(.protocolError(message)):
             statusMessage = "Could not load detections: \(message)"
+            detectionsError = statusMessage
         }
     }
 

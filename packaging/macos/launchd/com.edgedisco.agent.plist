@@ -7,15 +7,18 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/libexec/edgedisco/edgedisco</string>
-    <string>scan</string>
-    <string>--persist</string>
+    <string>daemon</string>
+    <string>--interval</string>
+    <string>60</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/</string>
   <key>RunAtLoad</key>
   <true/>
-  <key>StartInterval</key>
-  <integer>60</integer>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>ProcessType</key>
   <string>Background</string>
   <key>LimitLoadToSessionType</key>

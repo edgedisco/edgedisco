@@ -48,6 +48,20 @@ The installer installs:
 
 ## 3. Configuring OpenTelemetry (OTLP) Export
 
+The menu-bar app defaults to **My Session**, backed by the login user's persistent
+daemon. Choose **This Mac** for the privileged system daemon. **Open Inventory**
+opens a reusable, resizable window with search, state filters, versions, types, and
+last-seen timestamps. Scan Now and Refresh operate on the selected scope. The
+popover labels its counter **Last scan findings**; the window counts evidence
+records, which can include both installed and process evidence for one product.
+Previously loaded records are explicitly marked potentially stale if refresh fails.
+
+Existing installations need the updated package to replace the scheduled user
+collector with the persistent daemon. Before that upgrade, My Session can report
+unavailable even while This Mac works. Closing the inventory window keeps the
+menu-bar app running. Settings and live configuration updates remain planned;
+the instructions below configure the system daemon.
+
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 
 ### Persistent configuration

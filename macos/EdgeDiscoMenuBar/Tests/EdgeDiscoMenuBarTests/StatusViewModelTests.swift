@@ -4,6 +4,42 @@ import XCTest
 
 @MainActor
 final class StatusViewModelTests: XCTestCase {
+    func testScopesUseDistinctExplicitSockets() {
+        XCTAssertEqual(InventoryScope.system.socketPath, SocketPathResolver.systemSocketPath)
+        XCTAssertEqual(InventoryScope.user.socketPath, SocketPathResolver().userPath)
+        XCTAssertNotEqual(InventoryScope.user.socketPath, InventoryScope.system.socketPath)
+        XCTAssertEqual(StatusViewModel().scope, .user)
+    }
+
+    func testLateResponseFromPreviousScopeCannotPopulateNewScope() async {
+        let started = expectation(description: "old scope request started")
+        let release = DispatchSemaphore(value: 0)
+        let viewModel = StatusViewModel(statusFetcher: {
+            started.fulfill()
+            release.wait()
+            return .connected(StatusResult(healthy: true, startedAt: "now", lastScanAt: nil,
+                lastScanAssetCount: 99, deviceCount: 1, detectionCount: 99))
+        })
+        let task = Task { await viewModel.refresh() }
+        await fulfillment(of: [started], timeout: 1)
+        viewModel.scope = .system
+        release.signal()
+        await task.value
+        XCTAssertEqual(viewModel.assetCount, 0)
+        XCTAssertFalse(viewModel.isHealthy)
+    }
+
+    func testDetectionFailureRemainsVisibleAfterHealthyStatusRefresh() async {
+        let viewModel = StatusViewModel(detectionsFetcher: { .failure(.daemonNotRunning) })
+        await viewModel.loadDetections()
+        viewModel.apply(.connected(StatusResult(healthy: true, startedAt: "now", lastScanAt: nil,
+            lastScanAssetCount: 1, deviceCount: 1, detectionCount: 1)))
+        XCTAssertNotNil(viewModel.detectionsError)
+        viewModel.scope = .system
+        XCTAssertNil(viewModel.detectionsError)
+        XCTAssertTrue(viewModel.detections.isEmpty)
+    }
+
     func testStateTransitionsFromHealthyToDaemonNotRunningToProtocolError() {
         let viewModel = StatusViewModel()
         let healthyStatus = StatusResult(
