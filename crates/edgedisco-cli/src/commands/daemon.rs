@@ -118,12 +118,7 @@ fn ipc_config(args: &DaemonArgs) -> Result<IpcConfig, Box<dyn std::error::Error>
                 .copied()
                 .collect::<BTreeSet<_>>();
             let owner = args.ipc_owner_uid.zip(args.ipc_group_gid);
-            Ok(IpcConfig::system(
-                path,
-                allowed_uids,
-                allowed_gids,
-                owner,
-            )?)
+            Ok(IpcConfig::system(path, allowed_uids, allowed_gids, owner)?)
         }
     }
 }

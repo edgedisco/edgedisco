@@ -31,7 +31,9 @@ pub struct PeerIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerPolicy {
-    User { daemon_uid: u32 },
+    User {
+        daemon_uid: u32,
+    },
     System {
         allowed_uids: BTreeSet<u32>,
         allowed_gids: BTreeSet<u32>,
@@ -119,7 +121,8 @@ impl IpcConfig {
     ) -> Result<Self, IpcError> {
         if allowed_uids.is_empty() && allowed_gids.is_empty() {
             return Err(IpcError::InvalidConfig(
-                "system IPC mode requires at least one --ipc-allowed-uid or --ipc-allowed-gid".into(),
+                "system IPC mode requires at least one --ipc-allowed-uid or --ipc-allowed-gid"
+                    .into(),
             ));
         }
         Ok(Self {
