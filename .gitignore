@@ -4,6 +4,7 @@ __pycache__/
 *.db-wal
 *.db-shm
 .venv/
+.mcp-venv/
 dist/
 build/
 *.egg-info/
