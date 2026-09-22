@@ -24,6 +24,7 @@ All notable project changes are documented here.
 - Marked every MCP tool with read-only, non-destructive, closed-world protocol hints and added real MCP/OTLP dependency coverage in CI.
 - Added OTLP version state changes and distinct inventory-observation and server-receipt timestamps, plus an implementation-ready HTTP/protobuf exporter specification aligned with the reference `otel-stack` collector.
 - Made source-checkout commands, managed MCP checks, maintenance scripts, and Make targets consistently use their installation virtual environment after bootstrap.
+- Made the one-line streamed installer the preferred macOS and Linux path and detached its script pipe before child processes run, preventing platform-dependent consumption of unread installer input.
 
 ## 0.4.0
 

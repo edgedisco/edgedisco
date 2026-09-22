@@ -37,7 +37,14 @@ supported by the self-service installer.
 
 ## 1. Install EdgeDisco
 
-Download the complete installer, inspect it, and run it as the target desktop user:
+Install with one command as the target desktop user:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
+```
+
+The installer asks for confirmation through the terminal before making changes. To download and
+inspect the complete installer first, use:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
@@ -45,13 +52,7 @@ less install.sh
 bash install.sh
 ```
 
-The streamed form is also supported:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
-```
-
-The installer asks before making changes. It then:
+It then:
 
 1. Creates `~/.edgedisco/venv` and installs EdgeDisco with supported MCP and OTLP dependencies.
 2. Generates separate administrator and enrollment credentials.
@@ -68,12 +69,16 @@ activation is needed.
 Useful installer options are:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash -s -- --no-open
 bash install.sh --help
 bash install.sh --no-open
 bash install.sh --port 8090
 bash install.sh --all-adapters
 bash install.sh --yes --no-open
 ```
+
+For the streamed command, place installer options after `bash -s --`. The `bash install.sh`
+examples apply when using the downloaded copy.
 
 Use `EDGEDISCO_HOME` to select a different installer-managed root and `PYTHON_BIN` to select the
 Python interpreter. Preserve that `EDGEDISCO_HOME` value for upgrades; pass the same path through
@@ -107,7 +112,13 @@ edgedisco agent send --config ~/.edgedisco/agent.json
 
 ## 3. Upgrade or repair EdgeDisco
 
-Download a fresh installer and run it again as the same user with the same managed root:
+Run the one-line installer again as the same user with the same managed root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
+```
+
+For an inspect-before-running upgrade:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh

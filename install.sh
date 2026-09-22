@@ -10,6 +10,7 @@ TEMP_DIR=""
 INSTALL_COMPLETE=false
 UPGRADE_BACKUP=""
 UPGRADE_STARTED=false
+SCRIPT_PATH="${BASH_SOURCE[0]-}"
 
 usage() {
   cat <<'EOF'
@@ -35,6 +36,8 @@ Linux support requires systemd, systemctl, and an active systemd user session.
 Containers, WSL without systemd, and non-systemd desktops use manual deployment.
 
 Examples:
+  curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash -s -- --no-open
   bash install.sh
   bash install.sh --yes --no-open
   bash install.sh --port 8090 --all-adapters
@@ -74,6 +77,15 @@ failed() {
 }
 trap cleanup EXIT
 trap 'failed $LINENO' ERR
+
+main() {
+INSTALLER_FROM_STDIN=false
+if [[ -z "$SCRIPT_PATH" || ! -f "$SCRIPT_PATH" ]]; then
+  INSTALLER_FROM_STDIN=true
+  # Bash has parsed this complete function before calling it. Detach the
+  # script pipe now so no child process can consume unread installer input.
+  exec </dev/null
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -146,8 +158,7 @@ EdgeDisco will:
 It does not collect prompts, responses, source code, tool arguments, credentials,
 screenshots, browser history, or raw command lines.
 NOTICE
-  if [[ -t 0 || -n "${BASH_EXECUTION_STRING:-}" ||
-        ( -n "${BASH_SOURCE[0]-}" && -f "${BASH_SOURCE[0]}" ) ]]; then
+  if [[ "$INSTALLER_FROM_STDIN" == false ]]; then
     if ! read -r -p "Continue? [y/N] " answer; then
       echo "Interactive confirmation requires input; rerun with --yes for unattended installation." >&2
       exit 1
@@ -162,7 +173,6 @@ fi
 # bash -c/stdin has no script path. A local checkout installs directly;
 # otherwise fetch this repository's archive without requiring Git.
 PACKAGE_SOURCE=""
-SCRIPT_PATH="${BASH_SOURCE[0]-}"
 if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
   if [[ -f "$SCRIPT_DIR/pyproject.toml" && -d "$SCRIPT_DIR/src/ai_asset_inventory" ]]; then
@@ -298,3 +308,6 @@ Or run the managed installation directly:
 EOF
 fi
 INSTALL_COMPLETE=true
+}
+
+main "$@"

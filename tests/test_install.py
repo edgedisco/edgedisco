@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import json
+import shlex
 import socket
 import subprocess
 import sys
@@ -42,8 +43,25 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("docs/deployment-linux.md", README)
         self.assertNotIn("curl -fsSLO", README)
 
-    def test_setup_cannot_consume_piped_installer_input(self):
+    def test_streamed_installer_detaches_child_stdin(self):
+        self.assertIn("main() {", SCRIPT)
+        self.assertIn("exec </dev/null", SCRIPT)
         self.assertIn('"$CLI" setup "${SETUP_ARGS[@]}" </dev/null', SCRIPT)
+        with tempfile.TemporaryDirectory() as temp:
+            captured = Path(temp) / "child-stdin"
+            probe = SCRIPT.replace(
+                "while [[ $# -gt 0 ]]; do",
+                f"/bin/cat > {shlex.quote(str(captured))}\nwhile [[ $# -gt 0 ]]; do",
+                1,
+            )
+            self.assertNotEqual(probe, SCRIPT)
+            result = subprocess.run(
+                ["/bin/bash", "-s", "--", "--help"], input=probe,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Usage: bash install.sh", result.stdout)
+            self.assertEqual(captured.read_text(), "")
 
     def test_stdin_install_without_terminal_requires_yes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -278,8 +296,12 @@ class InstallerTests(unittest.TestCase):
 
                 (state / "com.edgedisco.server").write_text(str(old_server.pid))
 
+                # This is the execution model used by curl | bash. It must
+                # reach final verification without a child consuming the
+                # unread tail of the installer from stdin.
                 remote = subprocess.run(
-                    ["/bin/bash", "-c", SCRIPT], env=env, input="y\n",
+                    ["/bin/bash", "-s", "--", "--yes", "--no-open"],
+                    env=env, input=SCRIPT,
                     capture_output=True, text=True, timeout=180,
                 )
                 self.assertEqual(remote.returncode, 0, remote.stderr)
@@ -411,7 +433,7 @@ class InstallerTests(unittest.TestCase):
                 broken_script = SCRIPT.replace('SETUP_ARGS=(--root "$INSTALL_ROOT")', 'SETUP_ARGS=()')
                 self.assertNotEqual(broken_script, SCRIPT)
                 nounset = subprocess.run(
-                    ["/bin/bash", "-c", broken_script], env=env, input="y\n",
+                    ["/bin/bash", "-c", broken_script, "--", "--yes"], env=env,
                     capture_output=True, text=True, timeout=180,
                 )
                 self.assertNotEqual(nounset.returncode, 0)
