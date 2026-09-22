@@ -24,10 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify native Swift packages
         run: make swift-test
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Install packaging test runner
-        run: python -m pip install pytest
+        run: python3 -m pip install --quiet pytest
       - name: Verify native macOS package pipeline
         run: make macos-package-check
