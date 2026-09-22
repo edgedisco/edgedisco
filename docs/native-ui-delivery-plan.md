@@ -6,10 +6,11 @@ One SwiftUI application will provide a compact menu-bar summary, a searchable
 inventory window, Settings, and diagnostics. The native collector must first regain
 the Python inventory coverage that makes installed but idle tools visible.
 
-Current evidence: Rust collects processes, containers, and installed CLIs; Python
-also inventories apps, editor extensions, and MCP configuration. User and system
-daemons expose separate inventory scopes. User settings support live updates;
-system settings still require administrator-managed configuration and restart.
+Current evidence: Rust collects processes, containers, installed CLIs, bounded
+macOS app bundles, and VS Code-compatible extensions. Python additionally
+inventories JetBrains plugins and MCP configuration. User and system daemons
+expose separate inventory scopes. User settings support live updates; system
+settings still require administrator-managed configuration and restart.
 
 ## 1. Discovery parity
 
@@ -106,7 +107,13 @@ system settings still require administrator-managed configuration and restart.
   `CFBundleShortVersionString`, then `CFBundleVersion`, for XML or binary plists.
   Invalid, oversized, or linked metadata leaves the version unknown without
   hiding the detected app. This remains narrower than Python's installed-app inventory.
-- Remaining: executable fingerprint evidence, editor-extension/MCP collectors,
+- Added VS Code-compatible extension inventory for the five Python-supported
+  per-user roots (VS Code, Insiders, Cursor, Windsurf, VSCodium). Native scans
+  use exact catalog IDs from bounded `package.json` files and respect
+  `.obsolete`; symlinked folders/manifests, nested extensions, and oversized
+  metadata are skipped. Per-root manifest reads stop after a 16 MiB budget.
+  No extension code is executed or raw paths exported.
+- Remaining: executable fingerprint evidence, JetBrains plugin and MCP collectors,
   interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.
