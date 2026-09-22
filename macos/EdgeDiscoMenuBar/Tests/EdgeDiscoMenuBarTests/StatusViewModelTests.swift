@@ -79,4 +79,74 @@ final class StatusViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.deviceCount, 2)
         XCTAssertEqual(viewModel.statusMessage, "EdgeDisco daemon reported an unhealthy state")
     }
+
+    func testScanNowIsInFlightUntilFetcherCompletesAndUpdatesAssetCount() async {
+        let started = expectation(description: "scan dispatched")
+        let release = DispatchSemaphore(value: 0)
+        let viewModel = StatusViewModel(scanFetcher: {
+            started.fulfill()
+            release.wait()
+            return .success(ScanResult(accepted: true, assetCount: 14))
+        })
+
+        let task = Task { await viewModel.scanNow() }
+        await fulfillment(of: [started], timeout: 1)
+
+        XCTAssertTrue(viewModel.isScanning)
+
+        release.signal()
+        await task.value
+
+        XCTAssertFalse(viewModel.isScanning)
+        XCTAssertEqual(viewModel.assetCount, 14)
+    }
+
+    func testLoadDetectionsPublishesDecodedList() async {
+        let decoded = try! JSONDecoder().decode(
+            [SanitizedDetection].self,
+            from: Data(#"[{"kind":"cli","name":"Ollama","vendor":"Ollama","version":null,"running":true,"present":true,"last_seen":"2026-09-22T10:00:00Z","extra":"ignored"}]"#.utf8)
+        )
+        let viewModel = StatusViewModel(detectionsFetcher: { .success(decoded) })
+
+        await viewModel.loadDetections()
+
+        XCTAssertEqual(viewModel.detections, decoded)
+        XCTAssertEqual(viewModel.detections.first?.name, "Ollama")
+        XCTAssertEqual(viewModel.detections.first?.running, true)
+    }
+
+    func testScanFailureRestoresIdleStateAndPublishesError() async {
+        let viewModel = StatusViewModel(
+            scanFetcher: { .failure(.protocolError("connection reset by peer")) }
+        )
+
+        await viewModel.scanNow()
+
+        XCTAssertFalse(viewModel.isScanning)
+        XCTAssertEqual(viewModel.statusMessage, "Scan failed: connection reset by peer")
+    }
+
+    func testDetectionRunningLabelDescribesBothStates() {
+        let running = SanitizedDetection(
+            kind: "desktop_app",
+            name: "Claude",
+            vendor: "Anthropic",
+            version: nil,
+            running: true,
+            present: true,
+            lastSeen: nil
+        )
+        let stopped = SanitizedDetection(
+            kind: "cli",
+            name: "Ollama",
+            vendor: "Ollama",
+            version: nil,
+            running: false,
+            present: true,
+            lastSeen: nil
+        )
+
+        XCTAssertEqual(running.runningLabel, "Running")
+        XCTAssertEqual(stopped.runningLabel, "Not running")
+    }
 }

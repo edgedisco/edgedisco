@@ -50,4 +50,52 @@ final class ClientHappyPathTests: XCTestCase {
         )
         XCTAssertTrue(server.wait())
     }
+
+    func testScanUsesScanMethodAndDecodesResult() throws {
+        let server = try TestUnixServer { request in
+            responseFrame(
+                request: request,
+                resultJSON: #"{"accepted":true,"asset_count":12}"#
+            )
+        }
+        let client = EdgeDiscoClient(socketPath: server.path)
+
+        let result = client.scan()
+
+        XCTAssertEqual(result, .success(ScanResult(accepted: true, assetCount: 12)))
+        XCTAssertEqual(EdgeDiscoClient.explicitScanTimeout, 120)
+        XCTAssertTrue(server.wait())
+        let request = try JSONDecoder().decode(IpcRequest.self, from: server.snapshot().frame.dropLast())
+        XCTAssertEqual(request.method, "scan")
+    }
+
+    func testDetectionsIgnoresUnexpectedKeysAndDecodesSanitizedFields() throws {
+        let server = try TestUnixServer { request in
+            responseFrame(
+                request: request,
+                resultJSON: #"[{"kind":"desktop_app","name":"Claude","vendor":"Anthropic","version":"1.2.3","running":true,"present":true,"last_seen":"2026-09-22T10:00:00Z","unexpected":"ignored"}]"#
+            )
+        }
+        let client = EdgeDiscoClient(socketPath: server.path)
+
+        let result = client.detections()
+
+        XCTAssertEqual(
+            result,
+            .success([
+                SanitizedDetection(
+                    kind: "desktop_app",
+                    name: "Claude",
+                    vendor: "Anthropic",
+                    version: "1.2.3",
+                    running: true,
+                    present: true,
+                    lastSeen: "2026-09-22T10:00:00Z"
+                ),
+            ])
+        )
+        XCTAssertTrue(server.wait())
+        let request = try JSONDecoder().decode(IpcRequest.self, from: server.snapshot().frame.dropLast())
+        XCTAssertEqual(request.method, "detections")
+    }
 }

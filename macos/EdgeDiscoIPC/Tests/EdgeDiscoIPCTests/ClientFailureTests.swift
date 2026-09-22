@@ -70,6 +70,18 @@ final class ClientFailureTests: XCTestCase {
         XCTAssertLessThan(elapsed, 3)
     }
 
+    func testScanDisconnectReturnsProtocolError() throws {
+        let server = try TestUnixServer { _ in nil }
+
+        let result = EdgeDiscoClient(socketPath: server.path).scan()
+
+        guard case let .failure(.protocolError(message)) = result else {
+            return XCTFail("expected protocol error, got \(result)")
+        }
+        XCTAssertTrue(message.contains("response ended before newline"))
+        XCTAssertTrue(server.wait())
+    }
+
     private func assertProtocolError<Value>(
         _ state: ConnectionState<Value>,
         contains expectedText: String,

@@ -94,6 +94,63 @@ public struct StatusResult: Codable, Equatable, Sendable {
     }
 }
 
+public struct ScanResult: Codable, Equatable, Sendable {
+    public let accepted: Bool
+    public let assetCount: UInt64
+
+    public init(accepted: Bool, assetCount: UInt64) {
+        self.accepted = accepted
+        self.assetCount = assetCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case assetCount = "asset_count"
+    }
+}
+
+public struct SanitizedDetection: Codable, Equatable, Identifiable, Sendable {
+    public let kind: String
+    public let name: String
+    public let vendor: String
+    public let version: String?
+    public let running: Bool
+    public let present: Bool?
+    public let lastSeen: String?
+
+    public var id: String {
+        [kind, name, vendor, version ?? "", lastSeen ?? ""].joined(separator: "\u{1f}")
+    }
+
+    public init(
+        kind: String,
+        name: String,
+        vendor: String,
+        version: String?,
+        running: Bool,
+        present: Bool?,
+        lastSeen: String?
+    ) {
+        self.kind = kind
+        self.name = name
+        self.vendor = vendor
+        self.version = version
+        self.running = running
+        self.present = present
+        self.lastSeen = lastSeen
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case name
+        case vendor
+        case version
+        case running
+        case present
+        case lastSeen = "last_seen"
+    }
+}
+
 public struct NegotiateResult: Codable, Equatable, Sendable {
     public let protocolVersion: UInt16
     public let supportedVersions: [UInt16]

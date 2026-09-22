@@ -7,6 +7,11 @@ public enum ConnectionState<Value: Equatable & Sendable>: Equatable, Sendable {
     case protocolError(String)
 }
 
+public enum IpcError: Error, Equatable, Sendable {
+    case daemonNotRunning
+    case protocolError(String)
+}
+
 public struct SocketPathResolver: Sendable {
     public static let systemSocketPath = "/var/run/edgedisco.sock"
 
@@ -37,6 +42,7 @@ public struct EdgeDiscoClient: Sendable {
     public static let maximumRequestBytes = 16 * 1024
     public static let maximumResponseBytes = 256 * 1024
     public static let timeout: TimeInterval = 2
+    public static let explicitScanTimeout: TimeInterval = 120
 
     private enum PathSource: Sendable {
         case fixed(String)
@@ -80,8 +86,25 @@ public struct EdgeDiscoClient: Sendable {
         perform(method: "status")
     }
 
+    public func scan() -> Result<ScanResult, IpcError> {
+        result(from: perform(method: "scan", timeout: Self.explicitScanTimeout))
+    }
+
+    public func detections() -> Result<[SanitizedDetection], IpcError> {
+        result(from: perform(method: "detections"))
+    }
+
+    private func result<Value>(from state: ConnectionState<Value>) -> Result<Value, IpcError> {
+        switch state {
+        case let .connected(value): .success(value)
+        case .daemonNotRunning: .failure(.daemonNotRunning)
+        case let .protocolError(message): .failure(.protocolError(message))
+        }
+    }
+
     private func perform<Result: Codable & Equatable & Sendable>(
-        method: String
+        method: String,
+        timeout: TimeInterval = Self.timeout
     ) -> ConnectionState<Result> {
         guard let socketPath = pathSource.path() else { return .daemonNotRunning }
         let requestID = UUID().uuidString
@@ -97,7 +120,7 @@ public struct EdgeDiscoClient: Sendable {
             guard frame.count <= Self.maximumRequestBytes else {
                 return .protocolError("request exceeds \(Self.maximumRequestBytes)-byte limit")
             }
-            let responseData = try exchange(frame: frame, at: socketPath)
+            let responseData = try exchange(frame: frame, at: socketPath, timeout: timeout)
             let response = try JSONDecoder().decode(IpcResponse<Result>.self, from: responseData)
             guard response.protocolVersion == edgeDiscoProtocolVersion else {
                 return .protocolError("unsupported response protocol version \(response.protocolVersion)")
@@ -122,7 +145,7 @@ public struct EdgeDiscoClient: Sendable {
         }
     }
 
-    private func exchange(frame: Data, at path: String) throws -> Data {
+    private func exchange(frame: Data, at path: String, timeout requestTimeout: TimeInterval) throws -> Data {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
             throw TransportFailure.message("could not create Unix socket: \(posixMessage())")
@@ -139,7 +162,7 @@ public struct EdgeDiscoClient: Sendable {
         ) == 0 else {
             throw TransportFailure.message("could not configure Unix socket: \(posixMessage())")
         }
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        var timeout = timeval(tv_sec: Int(requestTimeout), tv_usec: 0)
         guard setsockopt(
             descriptor,
             SOL_SOCKET,
