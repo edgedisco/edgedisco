@@ -54,7 +54,9 @@ For the default managed database, `edgedisco otlp-status --json` automatically r
 
 With the Docker Compose stack in `../otel-stack` running, use
 `http://127.0.0.1:4318/v1/logs` as the collector endpoint. Port `4318` is OTLP ingestion, port
-`3001` is Grafana, and port `3100` is Loki.
+`3001` is Grafana, and port `3100` is Loki. These loopback addresses assume EdgeDisco and the stack
+run on the same host. A Linux VM does not share the macOS host's loopback interface; use a collector
+inside the VM, a VM-loopback forward, or an authenticated HTTPS endpoint.
 
 For a managed installation, follow the macOS or Linux setup link above and use that endpoint. To
 test the pipeline from a source checkout without sending real endpoint inventory, create a

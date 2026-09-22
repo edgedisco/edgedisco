@@ -202,7 +202,12 @@ must be an authenticated HTTPS URL unless it is a literal loopback address.
 
 Setup performs a fresh scan after the outbox is enabled. Older inventory is not automatically
 backfilled. For the local `otel-stack`, port `4318` is OTLP ingestion, port `3001` is Grafana, and
-the endpoint above is correct.
+the endpoint above is correct when the stack runs on the same Linux host.
+
+In an OrbStack or other Linux VM, `127.0.0.1` refers to the VM, not the macOS host. Run the
+collector inside the VM, forward it to a VM-loopback listener, or expose the host collector through
+an authenticated HTTPS endpoint. Do not substitute a host gateway name in an `http://` URL:
+EdgeDisco intentionally permits unencrypted OTLP only to a literal loopback address.
 
 ### Pause delivery and keep queuing
 
