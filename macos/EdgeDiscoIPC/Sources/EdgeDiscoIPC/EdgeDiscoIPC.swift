@@ -6,17 +6,65 @@ public struct IpcRequest: Codable, Equatable, Sendable {
     public let protocolVersion: UInt16
     public let requestID: String
     public let method: String
+    public let payload: SettingsUpdateRequest?
 
-    public init(protocolVersion: UInt16, requestID: String, method: String) {
+    public init(protocolVersion: UInt16, requestID: String, method: String, payload: SettingsUpdateRequest? = nil) {
         self.protocolVersion = protocolVersion
         self.requestID = requestID
         self.method = method
+        self.payload = payload
     }
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case requestID = "request_id"
         case method
+        case payload
+    }
+}
+
+public struct DaemonSettings: Codable, Equatable, Sendable {
+    public var schemaVersion: UInt32
+    public var intervalSeconds: UInt64
+    public var otlpEndpoint: String?
+    public var otlpBatchSize: Int
+    public var exportEnabled: Bool
+
+    public init(schemaVersion: UInt32 = 1, intervalSeconds: UInt64, otlpEndpoint: String?, otlpBatchSize: Int, exportEnabled: Bool) {
+        self.schemaVersion = schemaVersion
+        self.intervalSeconds = intervalSeconds
+        self.otlpEndpoint = otlpEndpoint
+        self.otlpBatchSize = otlpBatchSize
+        self.exportEnabled = exportEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case intervalSeconds = "interval_seconds"
+        case otlpEndpoint = "otlp_endpoint"
+        case otlpBatchSize = "otlp_batch_size"
+        case exportEnabled = "export_enabled"
+    }
+}
+
+public struct SettingsSnapshot: Codable, Equatable, Sendable {
+    public let settings: DaemonSettings
+    public let revision: String
+    public let writable: Bool
+}
+
+public struct SettingsUpdateRequest: Codable, Equatable, Sendable {
+    public let expectedRevision: String
+    public let settings: DaemonSettings
+
+    public init(expectedRevision: String, settings: DaemonSettings) {
+        self.expectedRevision = expectedRevision
+        self.settings = settings
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case expectedRevision = "expected_revision"
+        case settings
     }
 }
 

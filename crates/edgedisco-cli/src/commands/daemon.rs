@@ -1,4 +1,5 @@
 use crate::cli::{DaemonArgs, IpcModeArg};
+use crate::config::SettingsManager;
 use crate::ipc::{default_user_socket_path, DaemonIpcState, IpcConfig, IpcServer, ScanCommand};
 use crate::util::{
     current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
@@ -73,7 +74,7 @@ async fn export_outbox_if_configured(
 
 fn spawn_export_worker(
     store: Arc<Store>,
-    exporter: OtlpExporter,
+    mut settings: watch::Receiver<DaemonArgs>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -83,6 +84,8 @@ fn spawn_export_worker(
             tokio::select! {
                 _ = shutdown.changed() => break,
                 _ = interval.tick() => {
+                    let exporter = settings.borrow_and_update().otlp_exporter.as_deref().cloned();
+                    let Some(exporter) = exporter else { continue };
                     let result = tokio::select! {
                         _ = shutdown.changed() => break,
                         result = export_outbox_once(&store, &exporter) => result,
@@ -145,7 +148,12 @@ fn run_and_record_scan(
 
 /// Execute the `edgedisco daemon` command.
 pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let resolved = crate::config::resolve(args)?;
+    let mut base = args.clone();
+    if base.config.is_none() && base.ipc_mode == IpcModeArg::User {
+        let home = std::env::var_os("HOME").ok_or("HOME is required for user settings")?;
+        base.config = Some(PathBuf::from(home).join(".edgedisco/config/daemon.json"));
+    }
+    let resolved = crate::config::resolve(&base)?;
     let args = &resolved;
     let policy = ipc_config(args)?;
     if args.check_ready {
@@ -173,19 +181,31 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     let state = Arc::new(DaemonIpcState::new(current_timestamp()));
     let (scan_tx, mut scan_rx) = mpsc::channel::<ScanCommand>(8);
-    let server = IpcServer::bind(policy, Arc::clone(&store), Arc::clone(&state), scan_tx).await?;
+    let (settings_tx, mut settings_rx) = watch::channel(resolved.clone());
+    let writable_path = if args.ipc_mode == IpcModeArg::User {
+        base.config.clone()
+    } else {
+        None
+    };
+    let settings = Arc::new(SettingsManager::new(
+        writable_path,
+        base,
+        resolved.clone(),
+        settings_tx,
+    ));
+    let server = IpcServer::bind(policy, Arc::clone(&store), Arc::clone(&state), scan_tx)
+        .await?
+        .with_settings(settings);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let ipc_task = tokio::spawn(server.serve(shutdown_rx));
-    let export_task = args.otlp_exporter.as_ref().map(|exporter| {
-        spawn_export_worker(
-            Arc::clone(&store),
-            (**exporter).clone(),
-            shutdown_tx.subscribe(),
-        )
-    });
+    let export_task = spawn_export_worker(
+        Arc::clone(&store),
+        settings_rx.clone(),
+        shutdown_tx.subscribe(),
+    );
 
-    let interval_duration = Duration::from_secs(args.interval);
-    let mut interval = tokio::time::interval(interval_duration);
+    let mut active = resolved.clone();
+    let mut interval = tokio::time::interval(Duration::from_secs(active.interval));
 
     loop {
         tokio::select! {
@@ -203,6 +223,12 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
                 let result = run_and_record_scan(&store, &state).map_err(|error| error.to_string());
                 let _ = command.reply.send(result);
             }
+            changed = settings_rx.changed() => {
+                if changed.is_ok() {
+                    active = settings_rx.borrow_and_update().clone();
+                    interval = tokio::time::interval(Duration::from_secs(active.interval));
+                }
+            }
             _ = signal::ctrl_c() => {
                 println!("\nReceived shutdown signal; shutting down EdgeDisco daemon.");
                 break;
@@ -212,15 +238,15 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     let _ = shutdown_tx.send(true);
     ipc_task.await??;
-    if let Some(export_task) = export_task {
-        export_task.await?;
-    }
+    export_task.await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Cli, Commands};
+    use clap::Parser;
     use edgedisco_core::exporter::ExporterConfig;
     use edgedisco_core::models::OutboxRecord;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -278,8 +304,20 @@ mod tests {
             "http://{address}/v1/logs"
         )))
         .expect("exporter");
+        let cli = Cli::parse_from(["edgedisco", "daemon"]);
+        let Commands::Daemon(mut args) = cli.command else {
+            panic!()
+        };
+        let (settings_tx, settings_rx) = watch::channel(args.clone());
         let (shutdown, receiver) = watch::channel(false);
-        let worker = spawn_export_worker(Arc::clone(&store), exporter, receiver);
+        let worker = spawn_export_worker(Arc::clone(&store), settings_rx, receiver);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            store.get_outbox("worker-record").unwrap().unwrap().status,
+            "pending"
+        );
+        args.otlp_exporter = Some(Box::new(exporter));
+        settings_tx.send_replace(args);
         tokio::time::timeout(Duration::from_secs(3), collector)
             .await
             .expect("collector received request")

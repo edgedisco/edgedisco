@@ -1,7 +1,10 @@
+use clap::Parser;
+use edgedisco_cli::config::SettingsManager;
 use edgedisco_cli::ipc::{
     peer_identity, DaemonIpcState, IpcConfig, IpcLimits, IpcServer, PeerIdentity, PeerPolicy,
     ScanCommand, PROTOCOL_VERSION,
 };
+use edgedisco_cli::{Cli, Commands};
 use edgedisco_core::models::{Asset, Device};
 use edgedisco_core::store::Store;
 use serde_json::{json, Value};
@@ -71,6 +74,77 @@ async fn request(path: &Path, value: Value) -> Value {
         .await
         .expect("read response");
     serde_json::from_str(&line).expect("parse response")
+}
+
+#[tokio::test]
+async fn settings_ipc_applies_user_updates_but_denies_system_writes() {
+    let temp = TempDir::new().unwrap();
+    let cli = Cli::parse_from(["edgedisco", "daemon"]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    for system in [false, true] {
+        let socket = temp
+            .path()
+            .join(if system { "system.sock" } else { "user.sock" });
+        let config_path = temp.path().join("settings.json");
+        let (settings_tx, _) = watch::channel(args.clone());
+        let settings = Arc::new(SettingsManager::new(
+            if system {
+                None
+            } else {
+                Some(config_path.clone())
+            },
+            args.clone(),
+            args.clone(),
+            settings_tx,
+        ));
+        let policy = if system {
+            IpcConfig::system(
+                socket.clone(),
+                BTreeSet::from([unsafe { libc::geteuid() }]),
+                BTreeSet::new(),
+                None,
+            )
+            .unwrap()
+        } else {
+            IpcConfig::user(socket.clone(), unsafe { libc::geteuid() })
+        };
+        let (scan_tx, _) = mpsc::channel(1);
+        let server = IpcServer::bind(
+            policy,
+            test_store(
+                &temp
+                    .path()
+                    .join(if system { "system.db" } else { "user.db" }),
+            ),
+            Arc::new(DaemonIpcState::new("now")),
+            scan_tx,
+        )
+        .await
+        .unwrap()
+        .with_settings(settings);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(server.serve(shutdown_rx));
+        let get = request(
+            &socket,
+            json!({"protocol_version":1,"request_id":"get","method":"settings_get"}),
+        )
+        .await;
+        assert_eq!(get["ok"], true);
+        assert_eq!(get["result"]["writable"], !system);
+        let update = request(&socket, json!({"protocol_version":1,"request_id":"set","method":"settings_set","payload":{"expected_revision":get["result"]["revision"],"settings":{"schema_version":1,"interval_seconds":77,"otlp_endpoint":null,"otlp_batch_size":100,"export_enabled":false}}})).await;
+        assert_eq!(update["ok"], !system);
+        assert_eq!(config_path.exists(), !system);
+        if system {
+            assert_eq!(update["error"]["code"], "permission_denied");
+        }
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap().unwrap();
+        if !system {
+            std::fs::remove_file(&config_path).unwrap();
+        }
+    }
 }
 
 #[test]

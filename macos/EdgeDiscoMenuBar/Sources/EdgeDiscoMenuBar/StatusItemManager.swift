@@ -12,6 +12,7 @@ final class StatusItemManager: NSObject {
     private var pollTimer: Timer?
     private var stateObservation: AnyCancellable?
     private var inventoryWindow: NSWindow?
+    private var settingsWindow: NSWindow?
 
     init(viewModel: StatusViewModel? = nil) {
         let viewModel = viewModel ?? StatusViewModel()
@@ -25,7 +26,8 @@ final class StatusItemManager: NSObject {
             rootView: StatusPopoverView(
                 viewModel: viewModel,
                 quitAction: { NSApplication.shared.terminate(nil) },
-                openInventory: { [weak self] in self?.showInventory() }
+                openInventory: { [weak self] in self?.showInventory() },
+                openSettings: { [weak self] in self?.showSettings() }
             )
         )
 
@@ -73,6 +75,24 @@ final class StatusItemManager: NSObject {
         inventoryWindow?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         Task { await viewModel.loadDetections() }
+    }
+
+    private func showSettings() {
+        popover.performClose(nil)
+        if settingsWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 540, height: 410),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered, defer: false
+            )
+            window.title = "EdgeDisco Settings"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: SettingsView())
+            window.center()
+            settingsWindow = window
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     @objc

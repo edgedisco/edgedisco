@@ -119,6 +119,10 @@ pub struct DaemonArgs {
     #[arg(skip)]
     pub otlp_exporter: Option<Box<OtlpExporter>>,
 
+    /// Internal override from the versioned settings file.
+    #[arg(skip)]
+    pub export_enabled: Option<bool>,
+
     /// Unix-domain socket path for local IPC (defaults by IPC mode)
     #[arg(long)]
     pub ipc_socket: Option<PathBuf>,

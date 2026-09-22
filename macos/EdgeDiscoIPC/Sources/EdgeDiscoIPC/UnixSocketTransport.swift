@@ -86,6 +86,14 @@ public struct EdgeDiscoClient: Sendable {
         perform(method: "status")
     }
 
+    public func settings() -> ConnectionState<SettingsSnapshot> {
+        perform(method: "settings_get")
+    }
+
+    public func applySettings(_ settings: DaemonSettings, expectedRevision: String) -> ConnectionState<SettingsSnapshot> {
+        perform(method: "settings_set", payload: SettingsUpdateRequest(expectedRevision: expectedRevision, settings: settings))
+    }
+
     public func scan() -> Result<ScanResult, IpcError> {
         result(from: perform(method: "scan", timeout: Self.explicitScanTimeout))
     }
@@ -112,6 +120,7 @@ public struct EdgeDiscoClient: Sendable {
 
     private func perform<Result: Codable & Equatable & Sendable>(
         method: String,
+        payload: SettingsUpdateRequest? = nil,
         timeout: TimeInterval = Self.timeout
     ) -> ConnectionState<Result> {
         guard let socketPath = pathSource.path() else { return .daemonNotRunning }
@@ -119,7 +128,8 @@ public struct EdgeDiscoClient: Sendable {
         let request = IpcRequest(
             protocolVersion: edgeDiscoProtocolVersion,
             requestID: requestID,
-            method: method
+            method: method,
+            payload: payload
         )
 
         do {

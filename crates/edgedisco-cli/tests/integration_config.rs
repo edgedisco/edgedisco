@@ -2,6 +2,76 @@ use clap::Parser;
 use edgedisco_cli::{config, Cli, Commands};
 use tempfile::tempdir;
 
+#[test]
+fn settings_updates_persist_and_reject_stale_or_invalid_revisions() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config/daemon.json");
+    let cli = Cli::parse_from(["edgedisco", "daemon"]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    let (tx, rx) = tokio::sync::watch::channel(args.clone());
+    let manager = config::SettingsManager::new(Some(path.clone()), args.clone(), args, tx);
+    let first = manager.snapshot();
+    let mut settings = config::Settings::from_args(&rx.borrow());
+    settings.interval_seconds = Some(125);
+    settings.otlp_endpoint = Some("http://127.0.0.1:4318/v1/logs".into());
+    settings.export_enabled = Some(true);
+    let updated = manager
+        .update(first["revision"].as_str().unwrap(), settings.clone())
+        .unwrap();
+    assert_eq!(rx.borrow().interval, 125);
+    let mut restarted = rx.borrow().clone();
+    restarted.config = Some(path.clone());
+    assert_eq!(config::resolve(&restarted).unwrap().interval, 125);
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(manager
+        .update(first["revision"].as_str().unwrap(), settings.clone())
+        .is_err());
+    settings.interval_seconds = Some(0);
+    assert!(manager
+        .update(updated["revision"].as_str().unwrap(), settings)
+        .is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(rx.borrow().interval, 125);
+}
+
+#[test]
+fn ui_settings_preserve_private_otlp_transport_and_disable_live_export() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("daemon.json");
+    let secret = "Authorization=Bearer%20SECRET";
+    std::fs::write(&path, format!(r#"{{"schema_version":1,"otlp_endpoint":"https://collector.example.org/v1/logs","otlp_headers":"{secret}","otlp_compression":"gzip"}}"#)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let cli = Cli::parse_from(["edgedisco", "daemon", "--config", path.to_str().unwrap()]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    let current = config::resolve(&args).unwrap();
+    let (tx, rx) = tokio::sync::watch::channel(current.clone());
+    let manager = config::SettingsManager::new(Some(path.clone()), args, current, tx);
+    let snapshot = manager.snapshot();
+    assert!(!snapshot.to_string().contains("SECRET"));
+    assert!(!snapshot.to_string().contains("otlp_headers"));
+    let mut settings = config::Settings::from_args(&rx.borrow());
+    settings.export_enabled = Some(false);
+    let disabled = manager
+        .update(snapshot["revision"].as_str().unwrap(), settings.clone())
+        .unwrap();
+    assert!(rx.borrow().otlp_exporter.is_none());
+    assert!(std::fs::read_to_string(&path).unwrap().contains(secret));
+    settings.export_enabled = Some(true);
+    manager
+        .update(disabled["revision"].as_str().unwrap(), settings)
+        .unwrap();
+    assert!(rx.borrow().otlp_exporter.is_some());
+    assert!(config::resolve(&rx.borrow())
+        .unwrap()
+        .otlp_exporter
+        .is_some());
+}
+
 #[tokio::test]
 async fn readiness_retries_bad_response_then_accepts_healthy_status() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
