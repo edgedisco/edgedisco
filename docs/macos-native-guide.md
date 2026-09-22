@@ -78,7 +78,9 @@ under the user's VS Code, VS Code Insiders, Cursor, Windsurf, and VSCodium
 extension folders. They read bounded `package.json` metadata, ignore obsolete
 versions, and do not run extension code. MCP declarations in Claude Desktop,
 Cursor, and VS Code configuration are also inventoried without exporting URLs,
-arguments, environment variables, or raw paths. JetBrains plugins are not yet included.
+arguments, environment variables, or raw paths. Known JetBrains plugins with
+direct `META-INF/plugin.xml` manifests are included; JAR-backed manifests are
+not yet read.
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 

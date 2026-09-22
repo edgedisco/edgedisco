@@ -7,7 +7,7 @@ use edgedisco_core::models::{Asset, Device, DeviceReport, PrivacyFlags, ScanRepo
 use edgedisco_core::store::Store;
 use edgedisco_sensor::{
     scan_available_containers, scan_editor_extensions, scan_host_processes, scan_installed_apps,
-    scan_installed_clis, scan_mcp_configs, scan_processes,
+    scan_installed_clis, scan_jetbrains_plugins, scan_mcp_configs, scan_processes,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -29,6 +29,7 @@ pub fn generate_scan_report() -> Result<ScanReport, Box<dyn std::error::Error>> 
     let host = combine_discovery_assets(host, scan_installed_apps());
     let host = combine_discovery_assets(host, scan_editor_extensions());
     let host = combine_discovery_assets(host, scan_mcp_configs());
+    let host = combine_discovery_assets(host, scan_jetbrains_plugins());
     let mut assets = combine_discovery_assets(host, scan_available_containers());
     for asset in &mut assets {
         asset.present = None;
