@@ -28,11 +28,11 @@ EdgeDisco Enterprise uses a **three-tier endpoint architecture**:
 │    - Collects user-scoped process observations              │
 └───────────────────────────┬─────────────────────────────────┘
                             │ Spool sync / Local authenticated socket
-┌───────────────────────────▼─────────────────────────────────┐
+┌─────────────────────────────────────────────────────────────┐
 │ 3. System Core Daemon (LaunchDaemon)                        │
 │    - Runs as root / dedicated service user via LaunchDaemon │
 │    - Manages central local SQLite datastore & OTLP outbox   │
-│    - Serves loopback UI (127.0.0.1:8080)                    │
+│    - Exposes restricted local Unix Domain Socket IPC        │
 │    - Enforces MDM configuration policies                    │
 │    - Exports telemetry upstream to Enterprise Fleet Server  │
 └───────────────────────────┬─────────────────────────────────┘
@@ -101,9 +101,9 @@ This split establishes the blueprint across all supported endpoint operating sys
 
 | Option | Mechanics | Memory | Pros | Cons |
 | --- | --- | --- | --- | --- |
-| **Option 1: Status Item → Default Browser (Tailscale Model)** *(Recommended)* | Pure Swift `NSStatusItem`. Menu items show quick stats; "Open Dashboard" launches Safari/Chrome to authenticated loopback URL. | 10–15 MB | Minimal memory footprint; 100% reuse of existing responsive web dashboard. | Opens a browser tab instead of an enclosed desktop window. |
-| **Option 2: Native Menu Bar Popover (`WKWebView`)** | Clicking status icon drops down a native popover containing an embedded `WKWebView` rendering the dashboard. | ~40 MB (active) | Feels like an integrated desktop app (Docker Desktop / 1Password Mini model). | Higher memory usage while open; requires WebKit bridge handling. |
-| **Option 3: Headless Daemon (Osquery / Datadog Model)** | No UI or menu bar presence. Background services report directly to enterprise OTLP / fleet server. | 0 MB (no UI) | Zero GUI maintenance; completely invisible to developers. | Developers cannot inspect local observations, verify privacy boundaries, or trigger manual scans. |
+| **Option 1: Status Item + Native SwiftUI Popover (Recommended)** | Pure Swift `NSStatusItem` with SwiftUI popover. Communicates with daemon over Unix Domain Socket (`/var/run/edgedisco.sock`). Zero open TCP ports. | 10–15 MB | Minimal footprint; no port 8080 conflicts; crisp native macOS styling; immune to DNS rebinding. | Requires native Swift UI maintenance rather than web HTML. |
+| **Option 2: Headless Daemon (Osquery / Datadog Model)** | No UI or menu bar presence. Background services report directly to enterprise OTLP / fleet server. | 0 MB (no UI) | Zero GUI maintenance; completely invisible to developers. | Developers cannot inspect local observations, verify privacy boundaries, or trigger manual scans. |
+| **Option 3: Embedded Webserver / Browser UI (Legacy Model - Rejected)** | Daemon listens on `127.0.0.1:8080` and opens default browser with one-time tokens. | ~20–30 MB | Quick HTML reuse. | **Rejected:** Port 8080 collisions on developer laptops, DNS rebinding risks, bloated web stack in daemon. |
 
 ### Dimension B: Packaging & registration models
 
@@ -137,7 +137,8 @@ The user interface follows the lightweight model:
   - Warning badge when the server is unreachable or MDM policy enrollment is pending.
 - **Menu Actions:**
   - **Status summary:** Shows connected status, asset count, and last export timestamp.
-  - **Open Dashboard:** Requests a fresh one-time authenticated bootstrap token and launches the user's default browser to `http://127.0.0.1:8080/browser-bootstrap/<token>`.
+  - **View Local Detections:** Opens a native SwiftUI sheet displaying detected local AI tools, models, and agent runtimes.
+  - **Open Enterprise Portal:** Launches default browser to the corporate central cloud dashboard (`https://inventory.corp.internal`) authenticated via enterprise SSO/Okta.
   - **Run Manual Scan:** Signals the sensor to run an immediate discovery pass.
   - **Device & Enterprise Info:** Displays local device ID, enrolled enterprise tenant, and version.
   - **Export Diagnostic Archive:** Bundles sanitized logs and status for IT support.
@@ -233,7 +234,7 @@ Supported MDM payload keys:
 | `OtlpHeaders` | Dictionary | Authentication and routing headers for OTLP gRPC/HTTP |
 | `ScanIntervalSeconds` | Integer | Minimum polling interval (clamped to supported limits) |
 | `AllowedAdapters` | Array of Strings | Allowlisted runtime adapters (`cursor`, `claude-code`, `github-copilot`) |
-| `DisableLocalDashboard` | Boolean | Disables local web UI port if central reporting is strictly enforced |
+| `LocalUiEnabled` | Boolean | Controls whether menu bar status UI is displayed on user desktops (default: true) |
 
 ---
 
