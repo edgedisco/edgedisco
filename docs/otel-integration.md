@@ -405,7 +405,8 @@ The exporter tests and opt-in live integration cover:
    capped jitter, timeout, disconnect, invalid response, and response-size bounds.
 5. Delivered and failed retention, outbox age/capacity behavior, permanent-failure dedup recovery,
    status accuracy, and the absence of payloads or secrets from logs.
-6. An end-to-end run against `otel-stack` that exports a running asset, a stopped transition, a
+6. Formal requirements traceability and deterministic golden fixtures specified in [SPEC-001](spec/SPEC-001-OTLP-INVARIANTS.md) and exercised via `tests/test_otlp_fixtures.py`, `tests/test_privacy_invariants.py`, and `tests/test_outbox_invariants.py`.
+7. An end-to-end run against `otel-stack` that exports a running asset, a stopped transition, a
    versioned asset, and a simulated asset, then queries Loki to verify the expected metadata and
    timestamps.
 
