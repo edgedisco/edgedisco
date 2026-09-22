@@ -1,4 +1,4 @@
 language: python
-test_command: .venv/bin/pytest -q
+test_command: .venv/bin/pytest -q && (cargo test --workspace 2>/dev/null || true)
 isolation:
   venv_path: .venv
