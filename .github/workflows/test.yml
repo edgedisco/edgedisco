@@ -12,16 +12,17 @@ permissions:
 
 jobs:
   rust:
-    runs-on: self-hosted
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Rust verification
         run: make check
       - name: Rust release build
         run: make build-rust
 
   macos-package:
-    runs-on: self-hosted
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Verify native Swift packages
