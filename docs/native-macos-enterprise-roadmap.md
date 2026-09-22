@@ -1,6 +1,6 @@
 # Native macOS enterprise architecture and deployment roadmap
 
-EdgeDisco currently provides a per-user managed installation under `~/.edgedisco`, using LaunchAgents in the user's GUI domain. This roadmap defines the architecture, packaging, security boundaries, and implementation phases for an enterprise macOS version that can be deployed by administrators as root via MDM (Jamf Pro, Kandji, Mosyle, Microsoft Intune), run background components with appropriate privilege separation, present a native, lightweight menu bar status application, and expose on-demand MCP interfaces over stdio.
+EdgeDisco currently provides a per-user managed installation under `~/.edgedisco`, using LaunchAgents in the user's GUI domain. This roadmap defines the architecture, packaging, security boundaries, and implementation phases for an enterprise macOS version that can be deployed by administrators as root via MDM (Jamf Pro, Kandji, Mosyle, Microsoft Intune), run background components with appropriate privilege separation, present a native, lightweight menu bar status application, and report telemetry up to the enterprise central fleet server.
 
 ---
 
@@ -10,7 +10,7 @@ Enterprise macOS software must respect Apple's modern security architecture: Tra
 
 A monolithic root daemon cannot cleanly handle local AI runtime inspection because developer tools (Cursor, Claude Code, GitHub Copilot) run inside the user's login session and write configuration and hooks inside the user's home directory. Furthermore, starting in macOS 12+, root is subject to TCC protections and cannot read protected user directories without explicit enterprise authorization.
 
-EdgeDisco Enterprise uses a **three-tier architecture** with decoupled on-demand tooling:
+EdgeDisco Enterprise uses a **three-tier endpoint architecture**:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -34,14 +34,11 @@ EdgeDisco Enterprise uses a **three-tier architecture** with decoupled on-demand
 │    - Manages central local SQLite datastore & OTLP outbox   │
 │    - Serves loopback UI (127.0.0.1:8080)                    │
 │    - Enforces MDM configuration policies                    │
+│    - Exports telemetry upstream to Enterprise Fleet Server  │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ Shared SQLite WAL (Read-Only)
-┌───────────────────────────▼─────────────────────────────────┐
-│ 4. Decoupled Stdio MCP Server (Python / TypeScript CLI)     │
-│    - Spawned on-demand by developer IDEs over stdio         │
-│    - Zero network listeners, zero persistent background RAM │
-│    - Queries local inventory.db directly in read-only mode   │
-└─────────────────────────────────────────────────────────────┘
+                            │ OTLP / HTTPS Telemetry Sync
+                            ▼
+           [Enterprise Cloud / Fleet Server]
 ```
 
 ### Component roles
@@ -51,21 +48,26 @@ EdgeDisco Enterprise uses a **three-tier architecture** with decoupled on-demand
 | **Menu Bar App** | Login session | Logged-in user | Status visualization, menu actions, browser dashboard bootstrapping |
 | **Per-User Agent** | LaunchAgent (`gui/<uid>`) | Logged-in user | Runtime hooks, user config detection, local event spooling |
 | **System Daemon** | LaunchDaemon (`system`) | Root or `_edgedisco` | Central database, OTLP telemetry delivery, fleet server sync, host process inventory |
-| **MCP Server** | On-demand child process | Invoking IDE process | Serves tools to Cursor, Claude Code, Windsurf via `stdio` (no network port) |
 
 ---
 
-## 2. Decoupled on-demand MCP architecture (stdio)
+## 2. Architectural boundary: Endpoint sensor vs. Enterprise Cloud MCP
 
-The Model Context Protocol (MCP) server is **explicitly excluded from background system daemons and network listeners**:
+A critical design boundary separates the local macOS endpoint package from the enterprise governance layer:
 
-1. **Protocol standard:** Modern MCP clients (Cursor, Claude Desktop, Claude Code, Windsurf) launch MCP servers as direct child subprocesses communicating over `stdin` and `stdout`.
-2. **Network safety:** Running MCP as an HTTP/SSE network service opens unnecessary local TCP ports, risks port collisions, and creates firewall/proxy friction in enterprise developer environments.
-3. **Resource efficiency:** An on-demand stdio process consumes memory only while the developer's IDE or agent session is active, terminating immediately when the parent process exits.
-4. **Implementation flexibility:**
-   - **Python stdio runner:** Lightweight `edgedisco mcp` command connecting directly to the local SQLite database in read-only mode (`?mode=ro`).
-   - **TypeScript / Node.js package:** Standalone `@edgedisco/mcp` package distributed via npm / npx or bundled in the app, providing a clean TypeScript implementation for web/JS ecosystems.
-   - Both implementations share the exact same underlying SQLite database (`/Library/Application Support/EdgeDisco/data/inventory.db`) and schema without requiring IPC to the daemon.
+### Why the macOS endpoint has NO MCP server
+1. **Sensor, not query API:** The endpoint package is strictly a discovery sensor and telemetry forwarder. Its sole responsibility is observing local processes, files, and configurations, buffering them locally, and shipping telemetry to the central enterprise server.
+2. **Developer workflows do not query endpoint MCP:** Individual developers sitting at their workstations do not query an MCP server to ask what AI tools or models are installed on their own machine. Their IDEs and CLIs are the initiators of those workloads.
+3. **Attack surface minimization & privilege isolation:** Omitting MCP from the endpoint avoids opening local query ports, exposing SQLite databases to non-privileged processes, or bundling unnecessary runtimes into the macOS package. Local database directories can remain strictly protected (`0700`/`0750` root-only access).
+
+### Where MCP belongs: The Enterprise Cloud / Fleet Server
+1. **Enterprise agents need fleet-wide context:** Compliance bots, security operations agents (SecOps), asset governance harnesses, and Chief-of-Staff orchestrators require fleet-wide visibility across hundreds or thousands of developer workstations.
+2. **Network server implementation:** On the enterprise cloud / central server, EdgeDisco exposes an authenticated **network MCP server** (Streamable-HTTP / SSE) backed by the central aggregated inventory.
+3. **Enterprise governance use cases:**
+   - *"Which developer workstations in engineering are running unapproved local LLMs or Ollama models?"*
+   - *"List all machines with MCP configurations connecting to non-allowlisted external endpoints."*
+   - *"Audit fleet-wide AI tool adoption and security policy drift over the past 7 days."*
+4. **IAM integration:** Network MCP at the enterprise tier integrates with enterprise identity providers (OIDC, SAML, mTLS, scoped API tokens) rather than local OS accounts.
 
 ---
 
@@ -141,7 +143,7 @@ EdgeDisco-<version>.pkg
   - `Contents/Library/LaunchAgents/com.edgedisco.agent.plist`: Per-user agent configuration.
   - `Contents/Resources/`: Icons, assets, and web dashboard bundle.
 - `/Library/Application Support/EdgeDisco/`:
-  - `data/`: Central SQLite database (`inventory.db`) with `0755` directory permissions (`0644` WAL database for read-only MCP access).
+  - `data/`: Central local SQLite database (`inventory.db`) and OTLP outbox buffer with restricted permissions (`0700`/`0750` root/service only; no unauthenticated local reads).
   - `logs/`: System daemon logs.
   - `config/`: System-wide environment overrides and enrollment keys.
 - `/Library/LaunchDaemons/com.edgedisco.daemon.plist`: Symlinked or copied by `postinstall`.
@@ -224,12 +226,12 @@ Supported MDM payload keys:
 - Implement dynamic status icons (healthy, syncing, warning) and menu actions (dashboard launch, scan trigger).
 - Package `EdgeDisco.app` containing the menu bar executable and helper binaries.
 
-### Phase 3: Decoupled stdio MCP tools (Python & TypeScript)
-- Verify direct read-only SQLite access from `stdio` MCP processes.
-- Implement standalone Python `edgedisco-mcp` stdio entrypoint.
-- Author standalone TypeScript `@edgedisco/mcp` client package for npm / npx distribution.
-
-### Phase 4: MDM managed preferences & enterprise validation
+### Phase 3: MDM managed preferences & policy enforcement
 - Implement Managed Preferences parser reading `/Library/Managed Preferences/com.edgedisco.agent.plist`.
-- Ship a downloadable reference `.mobileconfig` profile for MDM distribution.
-- Test deployment across Jamf Pro and Microsoft Intune environments on clean macOS 13, 14, and 15 machines.
+- Ship a downloadable reference `.mobileconfig` profile for Jamf Pro, Kandji, and Intune distribution.
+- Support enterprise policy keys (central server URL, enrollment tokens, OTLP endpoint/headers, adapter filtering).
+
+### Phase 4: Enterprise fleet cloud integration & validation
+- Validate telemetry delivery and outbox synchronization against the central EdgeDisco Cloud service.
+- Verify that central cloud network MCP server (Streamable-HTTP / SSE) queries fleet inventory reported by macOS endpoints.
+- Test silent MDM installation, upgrade, and uninstallation across clean macOS 13, 14, and 15 machines.
