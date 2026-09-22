@@ -81,11 +81,10 @@ pub fn scan_jetbrains_plugins_in(root: &Path) -> Vec<Asset> {
             else {
                 continue;
             };
-            let Some(meta_dir) = open_child(&plugin_dir, OsStr::new("META-INF"), libc::O_DIRECTORY)
+            let direct = open_child(&plugin_dir, OsStr::new("META-INF"), libc::O_DIRECTORY)
+                .and_then(|meta_dir| read_regular(&meta_dir, OsStr::new("plugin.xml"), 131_072));
+            let Some(bytes) = direct.or_else(|| read_jar_manifest(&plugin_dir, &plugin.path()))
             else {
-                continue;
-            };
-            let Some(bytes) = read_regular(&meta_dir, OsStr::new("plugin.xml"), 131_072) else {
                 continue;
             };
             let Some((id, display, version)) = parse_identity(&bytes) else {
@@ -129,6 +128,31 @@ pub fn scan_jetbrains_plugins_in(root: &Path) -> Vec<Asset> {
     assets.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     assets.dedup_by(|a, b| a.fingerprint == b.fingerprint);
     assets
+}
+
+#[cfg(target_os = "macos")]
+fn read_jar_manifest(plugin_dir: &std::fs::File, plugin_path: &Path) -> Option<Vec<u8>> {
+    use crate::safe_metadata::{open_child, read_regular};
+    use std::ffi::OsStr;
+    let lib = open_child(plugin_dir, OsStr::new("lib"), libc::O_DIRECTORY)?;
+    let jars = std::fs::read_dir(plugin_path.join("lib")).ok()?;
+    let mut total = 0usize;
+    for entry in jars.take(32).flatten() {
+        if entry.path().extension() != Some(OsStr::new("jar")) {
+            continue;
+        }
+        let Some(bytes) = read_regular(&lib, &entry.file_name(), 64 * 1024 * 1024) else {
+            continue;
+        };
+        total += bytes.len();
+        if total > 64 * 1024 * 1024 {
+            break;
+        }
+        if let Some(xml) = crate::jar_manifest::plugin_xml(&bytes) {
+            return Some(xml);
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]

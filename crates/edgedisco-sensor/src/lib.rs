@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod editor_extensions;
 pub mod installed;
 pub mod installed_apps;
+mod jar_manifest;
 pub mod jetbrains_plugins;
 pub mod mcp_configs;
 pub mod process;
