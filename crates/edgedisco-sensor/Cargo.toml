@@ -1,0 +1,18 @@
+[package]
+name = "edgedisco-sensor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+edgedisco-core = { path = "../edgedisco-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+libc = "0.2"
+shlex = "2.0"
+regex = "1.11"
+
+[dev-dependencies]
+tempfile = "3.27"
