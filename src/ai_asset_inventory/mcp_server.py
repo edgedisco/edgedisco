@@ -120,9 +120,9 @@ def create_server(db_path: Path, audit_path: Path | None = None):
                             limit: int = 100) -> list[dict[str, Any]]:
         """List sanitized agent sessions, optionally filtered by status or host application.
 
-        Status values are ``pending``, ``active``, ``completed``, ``failed``, ``idle``, or the
-        derived ``stale`` value for an active session unseen for 15 minutes. ``limit`` defaults
-        to 100 and is capped at 500 records.
+        Status values are ``active``, ``completed``, ``failed``, ``idle``, or the derived
+        ``stale`` value for an active session unseen for 15 minutes. ``limit`` defaults to 100
+        and is capped at 500 records.
         """
         arguments = {"status": status, "app": app, "limit": limit}
         return audited(

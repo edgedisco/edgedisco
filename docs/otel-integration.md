@@ -1,4 +1,4 @@
-# OpenTelemetry integration design
+# OpenTelemetry integration
 
 EdgeDisco projects privacy-filtered asset state changes into a durable SQLite outbox and
 exports them as OTLP Logs over HTTP with binary protobuf. Delivery runs in a separate process,
@@ -20,11 +20,18 @@ flowchart LR
   C --> L[Loki]
 ```
 
-## Enable or disable managed export
+## Managed setup paths
 
-There is currently no dashboard control for OTLP settings. Managed installations read them from
-`~/.edgedisco/server.env`. The default is fully off: setup does not create an exporter service,
-the inventory server does not populate the OTLP outbox, and no telemetry leaves the host.
+Use the operating-system guide for complete installation, enablement, verification, pause, and
+disablement steps:
+
+- [macOS OTLP setup](deployment-macos.md#5-set-up-optional-otlp-export)
+- [Linux OTLP setup](deployment-linux.md#5-set-up-optional-otlp-export)
+
+There is no dashboard control for OTLP. Managed installations read settings from
+`~/.edgedisco/server.env`; both switches default to `false`, and no exporter service exists until
+delivery is explicitly enabled. The rest of this page is the exporter configuration and behavior
+reference.
 
 The two switches support three modes:
 
@@ -34,160 +41,45 @@ The two switches support three modes:
 | `true` | `false` | Queue-only. New state changes enter the bounded outbox, but setup removes the exporter service and sends nothing. |
 | `true` | `true` | Active. New state changes enter the outbox and the separate exporter service delivers due records. |
 
-`false`/`true` is invalid because delivery cannot run without the outbox.
+`false`/`true` is invalid because delivery cannot run without the outbox. Setup removes the
+exporter service only after it verifies that the process stopped. Disabling OTLP does not delete
+existing outbox rows or delivery totals. `edgedisco uninstall --purge --yes` deletes the complete
+managed database; there is no OTLP-only purge command.
 
-### Enable delivery
+For the default managed database, `edgedisco otlp-status --json` automatically reads
+`~/.edgedisco/server.env`. For a custom root, pass both `--db` and `--env-file`. Use
+`--process-env` only for a manual process configured by the current shell.
 
-Open `~/.edgedisco/server.env` in a text editor and add or replace these lines. Keep only one line
-for each setting:
+## Test against the local stack
 
-```dotenv
-export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
-export EDGEDISCO_OTLP_EXPORT_ENABLED=true
-export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
-```
+With the Docker Compose stack in `../otel-stack` running, use
+`http://127.0.0.1:4318/v1/logs` as the collector endpoint. Port `4318` is OTLP ingestion, port
+`3001` is Grafana, and port `3100` is Loki.
 
-`http/protobuf` is the default protocol, so it does not need to be set. Plain HTTP is accepted only
-for a literal loopback address. Use an authenticated HTTPS endpoint for a remote collector.
-
-Apply the settings and create the optional service:
-
-```sh
-edgedisco setup --no-open
-edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
-```
-
-For this default managed database, `otlp-status` automatically reads `~/.edgedisco/server.env`.
-File settings are checked independently of ambient shell variables. `configuration_source` reports
-`file` or `environment`, and `export_enabled` describes the configuration being checked, not whether
-a worker is currently running. Confirm process health using the service commands below.
-
-For a custom managed root, use both paths explicitly:
+For a managed installation, follow the macOS or Linux setup link above and use that endpoint. To
+test the pipeline from a source checkout without sending real endpoint inventory, create a
+development environment and run the isolated verification script:
 
 ```sh
-edgedisco setup --root /path/to/edgedisco --no-open
-edgedisco otlp-status --db /path/to/edgedisco/data/inventory.db \
-  --env-file /path/to/edgedisco/server.env --json
-```
-
-Use `--process-env` for a manual deployment whose configuration comes from the current shell.
-An explicitly supplied missing configuration file is an error; status does not silently fall back.
-
-On macOS, verify the process with:
-
-```sh
-launchctl print "gui/$(id -u)/com.edgedisco.otlp-export"
-tail -f ~/.edgedisco/logs/otlp-export.err.log
-```
-
-On Linux, verify it with:
-
-```sh
-systemctl --user status com.edgedisco.otlp-export.service
-journalctl --user -u com.edgedisco.otlp-export.service
-```
-
-Existing inventory is not backfilled. Setup sends a fresh scan after restarting the server, and
-subsequent state changes populate the enabled outbox.
-
-### Pause delivery but keep queuing
-
-Set the outbox to `true` and export to `false`, then rerun setup:
-
-```dotenv
-export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
-export EDGEDISCO_OTLP_EXPORT_ENABLED=false
-```
-
-```sh
-edgedisco setup --no-open
-```
-
-Setup stops and removes the managed exporter service. The inventory server continues adding state
-changes to the bounded outbox. Re-enabling export resumes eligible queued records. Queue age and
-capacity limits still apply while delivery is paused.
-Disablement runs before server restart, enrollment, and scanning. Setup removes the service
-definition only after a successful stop and a service-manager check that it is no longer running.
-If stopping or verification fails, setup reports an error and retains the definition for recovery;
-do not assume delivery stopped until the service manager confirms it.
-
-### Disable OTLP completely
-
-Set both switches to `false`, remove any endpoint, header, certificate, and client-key settings that
-are no longer needed, then rerun setup:
-
-```dotenv
-export EDGEDISCO_OTLP_OUTBOX_ENABLED=false
-export EDGEDISCO_OTLP_EXPORT_ENABLED=false
-```
-
-```sh
-edgedisco setup --no-open
-edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
-```
-
-Setup stops and removes the managed exporter service, and the restarted inventory server stops
-creating new OTLP records. Disabling does not delete existing outbox rows or delivery totals.
-Re-enabling later resumes eligible queued records; records older than the seven-day outbox limit
-are discarded when the worker next claims work. While the worker remains disabled, those rows are
-retained. `edgedisco uninstall --purge --yes` deletes the complete managed database along with all
-other local EdgeDisco data; there is no OTLP-only purge command.
-
-## Running against the local stack
-
-With the Docker Compose stack in `../otel-stack` running, use its collector endpoint on
-**4318**. Port **3001** is Grafana; it is not the ingestion endpoint.
-
-```sh
-# From an EdgeDisco source checkout:
 cd /path/to/edgedisco
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[otlp]'
-export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
-export EDGEDISCO_OTLP_EXPORT_ENABLED=true
-export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
-export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
-
-# Restart the inventory server with OUTBOX_ENABLED=true before collecting new scans.
-# In a separate terminal with these same settings:
-edgedisco otlp-export --db ~/.edgedisco/data/inventory.db
-
-# Queue health, totals, and configuration validation:
-edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --process-env --json
-```
-
-`otlp-export --once` processes one due claim and exits. It does not wait for future retries;
-inspect `otlp-status` for the delivery outcome. The normal command polls until SIGINT/SIGTERM.
-Existing inventory is not automatically backfilled: new scans populate the enabled outbox.
-The worker requires an existing database; it never creates or replaces an inventory database.
-Schema version 2 outboxes migrate transactionally to version 3; older schemas require starting
-the updated inventory server first.
-
-For a manual foreground deployment, stop delivery with Ctrl-C or SIGTERM, then restart the
-inventory server without `EDGEDISCO_OTLP_OUTBOX_ENABLED=true` if new records should also stop.
-Shell exports affect only processes started from that environment; they do not create or remove a
-managed service. Use `edgedisco setup --no-open` for managed-service changes.
-
-Managed installations should follow the enablement steps above. The managed installer includes the
-OTLP dependencies, and upgrades, rollback, and uninstall include the optional exporter service.
-Custom installations must install the `[otlp]` extra themselves. Both switches default to `false`,
-and the endpoint has no default. Once explicitly enabled, protocol, batching, timeout, retry,
-lease, and retention settings have the operational defaults listed below.
-
-To test the full pipeline with an isolated database and four simulated observations:
-
-```sh
-PYTHONPATH=src python scripts/verify_otlp_export.py \
+python scripts/verify_otlp_export.py \
   --endpoint http://127.0.0.1:4318/v1/logs \
   --output-dir /tmp/edgedisco-otel-verification
 ```
 
-Use a fresh output directory on each run. The script invokes the real exporter CLI, alternates
-plain/gzip requests, and queries Loki on port 3100. It checks running/stopped transitions,
-versions, simulation and host metadata, observation IDs, and both event and observed timestamps.
-It leaves the test database and `result.json` in that directory and prints a LogQL query to use
-in Grafana Explore on `http://127.0.0.1:3001`. No real endpoint inventory is sent by this test.
+Use a fresh output directory on each run. The script creates its own database, invokes the real
+exporter, alternates plain and gzip requests, and queries Loki. It checks running and stopped
+transitions, versions, simulation and host metadata, observation IDs, and event and receipt
+timestamps. It leaves the test database and `result.json` in the output directory and prints a
+LogQL query for Grafana Explore. No real endpoint inventory is sent.
+
+For any manual foreground exporter, shell variables configure only processes started from that
+shell; they do not create or remove a managed service. `edgedisco otlp-export --once` processes one
+due claim and exits, while the normal command polls until SIGINT or SIGTERM. The worker requires an
+existing database and never creates or replaces one.
 
 The projection emits `edgedisco.asset.observed` log records for recognized applications,
 processes, and agent runtimes. It exports state transitions rather than every heartbeat. The

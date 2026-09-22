@@ -31,7 +31,17 @@ edgedisco demo
 
 The installer creates a per-user installation under `~/.edgedisco`, starts local services, and opens the dashboard. It does not need `sudo`, Git, or a manually created virtual environment. The demo runs short-lived **simulated test workloads** through the real detector, labels their evidence as simulated, and stops them when it finishes. To open the dashboard later, run `edgedisco dashboard`.
 
-Linux self-service needs an active `systemd --user` session. See the [macOS](docs/deployment-macos.md) and [Linux](https://github.com/edgedisco/edgedisco/blob/main/docs/deployment-linux.md) guides for requirements, upgrades, custom ports, and uninstalling. Run `bash install.sh --help` for installer options.
+Linux self-service needs an active `systemd --user` session. Use the complete operating-system
+guide for installation, verification, upgrades, MCP, OTLP, logs, and removal:
+
+| Task | macOS | Linux |
+| --- | --- | --- |
+| Install and verify | [macOS steps](docs/deployment-macos.md#1-install-edgedisco) | [Linux steps](docs/deployment-linux.md#1-install-edgedisco) |
+| Upgrade or repair | [macOS steps](docs/deployment-macos.md#3-upgrade-or-repair-edgedisco) | [Linux steps](docs/deployment-linux.md#3-upgrade-or-repair-edgedisco) |
+| Set up MCP | [macOS steps](docs/deployment-macos.md#4-set-up-the-optional-mcp-server) | [Linux steps](docs/deployment-linux.md#4-set-up-the-optional-mcp-server) |
+| Set up OTLP | [macOS steps](docs/deployment-macos.md#5-set-up-optional-otlp-export) | [Linux steps](docs/deployment-linux.md#5-set-up-optional-otlp-export) |
+
+Run `bash install.sh --help` for installer options.
 
 ## What it sees
 
@@ -50,42 +60,12 @@ The self-service server binds to localhost. Device uploads use individual creden
 
 ## Project status
 
-EdgeDisco 0.5.0 is an evaluation and controlled-pilot MVP. The dashboard, CSV evidence exports, and MCP inventory feed work today. Optional OTLP Logs delivery includes privacy-filtered asset projection, a durable outbox, and a separately supervised Python exporter process with retries and delivery status. Export is disabled by default and is configured through the protected environment file rather than the dashboard. See [OpenTelemetry integration](docs/otel-integration.md) for configuration and the local collector verification command.
-
-The [managed OTLP enable/disable steps](docs/otel-integration.md#enable-or-disable-managed-export)
-cover active delivery, queue-only operation, verification, and complete shutdown of OTLP capture
-and delivery.
-
-### Optional OpenTelemetry export
-
-The managed installer includes the exporter code and dependencies, but creates no exporter service
-until explicitly enabled. To send asset observations to the local collector, add or update these
-settings in `~/.edgedisco/server.env`, preserving existing credentials:
-
-```sh
-export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
-export EDGEDISCO_OTLP_EXPORT_ENABLED=true
-export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
-```
-
-Then apply the settings and inspect delivery status:
-
-```sh
-edgedisco setup --no-open
-edgedisco otlp-status --json
-```
-
-Status automatically reads `~/.edgedisco/server.env` for the default managed database. It reports
-configured enablement and stored delivery results; use launchd/systemd status to confirm the process
-is running. For a custom installation, pass `--db /path/to/inventory.db --env-file /path/to/server.env`.
-Manual deployments can use `--process-env` to inspect the current shell configuration instead.
-
-To disable delivery, set `EDGEDISCO_OTLP_EXPORT_ENABLED=false` in the same file and rerun
-`edgedisco setup --no-open`. Also set `EDGEDISCO_OTLP_OUTBOX_ENABLED=false` to stop queuing new
-records. Setup verifies the exporter has stopped before removing its service definition; a stop
-failure is reported and the definition is retained for recovery. Existing queued data is not purged.
-See the [OTLP guide](docs/otel-integration.md#enable-or-disable-managed-export) for service checks,
-queue retention, and re-enabling. Grafana is on port 3001; OTLP ingestion uses port 4318.
+EdgeDisco 0.5.0 is an evaluation and controlled-pilot MVP. The dashboard, CSV evidence exports,
+and optional MCP inventory feed work today. Optional OTLP Logs delivery includes a privacy-filtered
+projection, durable outbox, and separately supervised exporter process. MCP and OTLP are disabled
+unless started or enabled by the operator. Their protocol, privacy, and advanced configuration
+references are [MCP inventory access](docs/inventory-sync-mcp.md) and
+[OpenTelemetry integration](docs/otel-integration.md).
 
 ## Roadmap
 

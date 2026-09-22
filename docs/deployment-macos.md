@@ -1,18 +1,35 @@
-# Deploy on macOS
+# Install and operate EdgeDisco on macOS
 
-For systemd-based Linux, use the separate [Linux deployment guide](deployment-linux.md).
+This is the complete guide for a managed, per-user EdgeDisco installation on macOS. Follow it in
+order for a new installation, or jump to the numbered section for upgrades, MCP, or OpenTelemetry.
+For Linux, use the [Linux guide](deployment-linux.md).
 
-This guide runs the EdgeDisco server and collector on one Mac for evaluation. A production rollout should host the server centrally behind HTTPS and install only the collector on managed endpoints.
+The managed installation uses `~/.edgedisco`, creates its own Python virtual environment, and
+installs a stable `edgedisco` command. Do not activate the managed virtual environment.
 
-## Self-service installation
+| Goal | Section |
+| --- | --- |
+| New installation | [1. Install EdgeDisco](#1-install-edgedisco) |
+| Confirm it works | [2. Verify the installation](#2-verify-the-installation) |
+| Upgrade or repair | [3. Upgrade or repair EdgeDisco](#3-upgrade-or-repair-edgedisco) |
+| Start MCP | [4. Set up the optional MCP server](#4-set-up-the-optional-mcp-server) |
+| Enable or disable OTLP | [5. Set up optional OTLP export](#5-set-up-optional-otlp-export) |
+| Remove EdgeDisco | [7. Uninstall](#7-uninstall) |
 
-Requirements:
+## Requirements
 
-- macOS 12 or newer (supported; the installer does not enforce the OS version)
-- Python 3.9 or newer
-- An internet connection for the initial install
+- macOS 12 or newer
+- Python 3.9 or newer; use Python 3.10 or newer if you plan to run the optional MCP server
+- An internet connection for installation or upgrade
+- A normal user account; do not use `sudo`
 
-Download, inspect, and run the installer:
+The installer does not request Full Disk Access, Accessibility, Automation, Screen Recording, or
+Input Monitoring. macOS may show its normal Background Items notification when the per-user
+LaunchAgents are installed.
+
+## 1. Install EdgeDisco
+
+Download the complete installer, inspect it, and run it:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
@@ -20,108 +37,221 @@ less install.sh
 bash install.sh
 ```
 
-Inspect built-in help without changing the system:
+The streamed form is also supported:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash
+```
+
+The installer asks before making changes. It then:
+
+1. Creates `~/.edgedisco/venv` and installs EdgeDisco with supported MCP and OTLP dependencies.
+2. Generates separate administrator and enrollment credentials.
+3. Starts the local inventory server on `127.0.0.1:8080`.
+4. Enrolls this Mac and sends the first sanitized inventory report.
+5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot apps.
+6. Creates per-user LaunchAgents for the server and collector.
+7. Adds the `edgedisco` launcher to `~/.local/bin` and updates the login-shell path.
+8. Opens the authenticated dashboard.
+
+Open a new Terminal window after installation so the updated path is active. No virtual
+environment activation is needed.
+
+Useful installer options are:
 
 ```bash
 bash install.sh --help
-```
-
-| Option | Description |
-| --- | --- |
-| `-h`, `--help` | Show all options, environment overrides, and examples, then exit |
-| `--yes` | Skip the confirmation prompt after the script has been reviewed |
-| `--port PORT` | Set the localhost server port; the default is `8080` |
-| `--all-adapters` | Install every supported app adapter instead of only detected adapters |
-| `--no-open` | Suppress browser launch; use `edgedisco dashboard` afterward for an authenticated session |
-
-The installer also accepts `EDGEDISCO_HOME` for a custom managed root, `PYTHON_BIN` for the Python 3.9+ interpreter, and `EDGEDISCO_ARCHIVE_URL` for the archive fetched by remote/stdin installation. `bash ./install.sh` from a checkout installs that checkout, prints its path, and does not use the archive URL; this is the supported way to test uncommitted installer changes. Piping a script through stdin provides no checkout path and downloads the configured archive. Preserve the same `EDGEDISCO_HOME` value across upgrades.
-
-The installer does not use `sudo` and does not request Full Disk Access, Accessibility, Automation, Screen Recording, or Input Monitoring. It:
-
-1. Creates `~/.edgedisco/venv` and installs EdgeDisco there.
-2. Generates distinct administrator and enrollment credentials.
-3. Starts a local server on `127.0.0.1:8080`.
-4. Enrolls the Mac and sends its first sanitized inventory report.
-5. Installs metadata-only adapters for detected Cursor, Claude Code, and GitHub Copilot installations.
-6. Creates per-user LaunchAgents for the server and collector. If OTLP export is explicitly
-   enabled, setup also creates a separate exporter LaunchAgent.
-7. Installs a stable `edgedisco` command for normal Terminal sessions.
-8. Opens the dashboard. The administrator token stays in the protected local configuration file.
-
-The services start whenever that user logs in. Credentials and optional OTLP settings are stored
-with user-only permissions in `~/.edgedisco/server.env`; they are not embedded in LaunchAgent
-files. OTLP export is disabled by default and is configured in this file, not in the dashboard.
-After changing the settings, rerun `edgedisco setup --no-open` to add, restart, or remove the
-exporter service. The [OpenTelemetry guide](otel-integration.md#enable-or-disable-managed-export)
-provides the exact settings and commands for active delivery, queue-only mode, and fully disabling
-OTLP. Disabling export removes the LaunchAgent; disabling the outbox also stops creation of new
-OTLP records. Existing queued rows remain in the database while the exporter is disabled.
-
-The collector stays inside `/Applications`, `~/Applications`, explicitly allowlisted executable directories, standard per-user editor-extension/plugin directories, supported MCP configuration files, and current-user process metadata. It does not search Desktop, Documents, Downloads, iCloud Drive, network volumes, removable media, or other users' processes. Editor inventory reads only exact extension directory identities and bounded JetBrains plugin manifests; it does not read editor settings or projects. Unreadable files are skipped without retrying with elevated privileges. macOS may show its normal Background Items notification when the per-user LaunchAgents are installed.
-
-Use another local port if 8080 is already assigned:
-
-```bash
+bash install.sh --no-open
 bash install.sh --port 8090
-```
-
-Install every supported adapter, including apps that are not currently detected:
-
-```bash
 bash install.sh --all-adapters
+bash install.sh --yes --no-open
 ```
 
-For unattended test machines, review the script first and then pass `--yes --no-open`.
+Use `EDGEDISCO_HOME` to select a different installer-managed root and `PYTHON_BIN` to select the
+Python interpreter. Preserve that `EDGEDISCO_HOME` value for upgrades; pass the same path through
+`--root` to later `edgedisco setup`, `status`, `dashboard`, and `uninstall` commands.
 
-## Verify the installation
+## 2. Verify the installation
 
-Open a new Terminal window after install, then:
+In a new Terminal, verify the server, enrollment, and LaunchAgents:
 
 ```bash
 edgedisco status
 curl http://127.0.0.1:8080/healthz
+launchctl print "gui/$(id -u)/com.edgedisco.server"
+launchctl print "gui/$(id -u)/com.edgedisco.agent"
 ```
 
-Run the local discovery demo (simulated workloads, real detector; no API keys):
+`edgedisco status` should report a healthy server and an enrolled endpoint. Open an authenticated
+dashboard session and optionally run the simulated discovery demo:
 
 ```bash
+edgedisco dashboard
 edgedisco demo
 ```
 
-The self-service installer installs a stable `edgedisco` command for normal shells. You do not need to activate a virtual environment or type the internal install path.
-
-The status output should show `Server: healthy` and `Endpoint: enrolled`. Open `http://127.0.0.1:8080`. If manual sign-in is needed, copy the token without printing it:
-
-```bash
-grep '^export AAI_ADMIN_TOKEN=' ~/.edgedisco/server.env | cut -d= -f2- | tr -d '\n' | pbcopy
-```
-
-Paste with **Command+V** and do not place the administrator token in screenshots, logs, issues, or chat.
-
-Start an agent task in Cursor, Claude Code, or GitHub Copilot. Then wait for the collector cycle or send immediately:
+The demo creates clearly labeled simulated evidence and does not require an API key. To force an
+immediate real inventory upload after installing or starting a supported tool, run:
 
 ```bash
-edgedisco agent send \
-  --config ~/.edgedisco/agent.json
+edgedisco agent send --config ~/.edgedisco/agent.json
 ```
 
-Refresh the dashboard. The active agent or recent session should appear when the application emits a supported lifecycle hook. Application inventory alone does not prove an agent ran; session evidence comes from the adapters.
+## 3. Upgrade or repair EdgeDisco
 
-## Logs and files
+Download a fresh installer and run it again with the same user and managed root:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
+less install.sh
+bash install.sh --no-open
+```
+
+Then verify the upgraded installation:
+
+```bash
+edgedisco status
+edgedisco dashboard
+```
+
+An upgrade preserves credentials, enrollment, custom configuration, evidence, and unrelated app
+hooks. It validates the existing configuration and database, stops the managed services, and
+creates a protected snapshot under `~/.edgedisco/backups/` before replacing files. If setup or
+verification fails, the installer restores the previous installation and reports the snapshot and
+failed-attempt location. These backups contain credentials and evidence; keep them private.
+
+Running `bash ./install.sh --yes --no-open` from a source checkout installs that checkout and is
+the supported way to test uncommitted installer changes. A downloaded installer always installs
+the published `main` branch.
+
+## 4. Set up the optional MCP server
+
+MCP requires Python 3.10 or newer. The managed installer includes the MCP dependency when its
+selected Python version supports it. MCP is optional and is not installed as a LaunchAgent; the
+following command runs a separate foreground Python process:
+
+```bash
+python3 --version
+edgedisco mcp \
+  --db ~/.edgedisco/data/inventory.db \
+  --host 127.0.0.1 \
+  --port 8081
+```
+
+Leave that Terminal open while an MCP client uses:
+
+```text
+http://127.0.0.1:8081/mcp
+```
+
+Stop the MCP server with Control-C. Its default audit log is
+`~/.edgedisco/data/mcp-audit.jsonl`. Use `--audit-log /path/to/audit.jsonl` to select another file.
+The server accepts loopback bind addresses only and exposes read-only, privacy-filtered tools.
+
+If the command reports a missing MCP dependency, the managed environment was created with Python
+3.9 or an older installation without the extra. If `~/.edgedisco/venv/bin/python --version`
+reports 3.10 or newer, follow the upgrade steps once to install the extra. Otherwise, use the
+[manual source-checkout instructions](inventory-sync-mcp.md#manual-source-checkout) with Python
+3.10 or newer. Tool schemas, pagination, audit contents, and reverse-proxy requirements are
+documented in the [MCP reference](inventory-sync-mcp.md).
+
+## 5. Set up optional OTLP export
+
+OTLP export is fully disabled by default. Enabling it creates a third LaunchAgent running a
+separate Python process. EdgeDisco supports OTLP Logs over HTTP/protobuf; the endpoint must be an
+authenticated HTTPS URL unless it is a literal loopback address.
+
+### Enable delivery
+
+1. Open the protected managed configuration:
+
+   ```bash
+   nano ~/.edgedisco/server.env
+   ```
+
+2. Add or update these lines, keeping all existing credential lines:
+
+   ```dotenv
+   export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+   export EDGEDISCO_OTLP_EXPORT_ENABLED=true
+   export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+   ```
+
+3. Apply the settings and create the exporter LaunchAgent:
+
+   ```bash
+   edgedisco setup --no-open
+   ```
+
+4. Verify configuration, queue state, and the exporter process:
+
+   ```bash
+   edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
+   launchctl print "gui/$(id -u)/com.edgedisco.otlp-export"
+   tail -n 50 ~/.edgedisco/logs/otlp-export.err.log
+   ```
+
+Setup performs a fresh scan after the outbox is enabled. Older inventory is not automatically
+backfilled. For the local `otel-stack`, port `4318` is OTLP ingestion, port `3001` is Grafana, and
+the endpoint above is correct.
+
+### Pause delivery and keep queuing
+
+Set these values in `~/.edgedisco/server.env`, then apply them:
+
+```dotenv
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=true
+export EDGEDISCO_OTLP_EXPORT_ENABLED=false
+```
+
+```bash
+edgedisco setup --no-open
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
+```
+
+The exporter LaunchAgent is removed, but new state changes continue entering the bounded outbox.
+
+### Disable OTLP completely
+
+Set both values to `false`, remove unused endpoint or authentication settings, and apply them:
+
+```dotenv
+export EDGEDISCO_OTLP_OUTBOX_ENABLED=false
+export EDGEDISCO_OTLP_EXPORT_ENABLED=false
+```
+
+```bash
+edgedisco setup --no-open
+edgedisco otlp-status --db ~/.edgedisco/data/inventory.db --json
+```
+
+This removes the exporter LaunchAgent and stops creating new OTLP records. Existing outbox rows
+and delivery totals remain in the database. See the [OTLP reference](otel-integration.md) for TLS,
+headers, batching, retries, retention, payload fields, and live-stack verification.
+
+## 6. Services, files, and logs
+
+The managed processes are:
+
+| Process | LaunchAgent | Enabled by default |
+| --- | --- | --- |
+| Inventory server | `com.edgedisco.server` | Yes |
+| Collector | `com.edgedisco.agent` | Yes |
+| OTLP exporter | `com.edgedisco.otlp-export` | Only when OTLP delivery is enabled |
+| MCP server | None; foreground command | No |
+
+Important files are:
 
 | Location | Purpose |
 | --- | --- |
-| `~/.edgedisco/server.env` | Local server credentials |
-| `~/.edgedisco/agent.json` | Enrolled endpoint configuration |
-| `~/.edgedisco/data/inventory.db` | Local compliance evidence |
-| `~/.edgedisco/logs/server.log` | Server standard output |
-| `~/.edgedisco/logs/server.err.log` | Server errors |
-| `~/.edgedisco/logs/agent.log` | Collector standard output |
+| `~/.edgedisco/server.env` | Server credentials and optional OTLP settings |
+| `~/.edgedisco/agent.json` | Endpoint enrollment and collector configuration |
+| `~/.edgedisco/data/inventory.db` | Local inventory, sessions, and OTLP outbox |
+| `~/.edgedisco/logs/server.err.log` | Inventory server errors |
 | `~/.edgedisco/logs/agent.err.log` | Collector errors |
-| `~/.edgedisco/logs/otlp-export.log` | OTLP delivery outcomes when export is enabled |
-| `~/.edgedisco/logs/otlp-export.err.log` | OTLP exporter errors when export is enabled |
+| `~/.edgedisco/logs/otlp-export.err.log` | OTLP exporter errors when enabled |
 
-Follow the logs:
+Follow logs with:
 
 ```bash
 tail -f ~/.edgedisco/logs/server.err.log
@@ -129,83 +259,42 @@ tail -f ~/.edgedisco/logs/agent.err.log
 tail -f ~/.edgedisco/logs/otlp-export.err.log
 ```
 
-## Upgrade or repair
+## 7. Uninstall
 
-Download the current installer and run it again. Existing credentials, enrollment, and evidence are preserved.
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh
-bash install.sh
-```
-
-Reinstall validates `agent.json` and the existing database before replacing the package. Invalid JSON, invalid settings, a non-regular or symlinked database, an unreadable database, or a configuration/database version newer than this release stops the upgrade. The error identifies the affected path and directs the user to check ownership and permissions; reinstall does not silently discard or replace unreadable evidence. Repair the existing file or use a compatible release.
-
-The managed package is force-reinstalled from the selected source even when its Python package version has not changed. This ensures catalog-only and detector-only updates are deployed. Setup then performs and uploads a fresh full inventory before restarting the background agent.
-
-Unversioned and version-1 configuration is migrated to `config_version: 2`, preserving custom settings and adding missing incremental-scanning defaults. The local server URL follows the configured port. Missing or rejected device credentials are re-enrolled with the local enrollment credential; timeouts and server errors do not trigger re-enrollment. Old EdgeDisco hook commands are replaced when paths change, while unrelated hooks remain intact.
-
-The installer prints a protected snapshot directory under `~/.edgedisco/backups/`. Each snapshot includes the previous managed environment, configuration, database, hook files, launch definitions, and shell profiles. Services are stopped before taking the snapshot, not just before package replacement. If installation fails, the installer restores the snapshot and reconciles evidence accepted during setup verification into the restored database before restarting prior services. This includes runtime events already acknowledged and removed from the spool, and supported OTLP outbox state. Fields absent from the old schema remain available in the full failed-attempt database under `failed-state/`. Runtime spool files are never rolled back. A failed stop prevents file replacement.
-
-Snapshots are retained and include credentials and evidence; keep them private. They consume space roughly proportional to the managed environment and database. If automatic recovery cannot finish, the installer reports the snapshot path. From a compatible source checkout, retry recovery with:
-
-```bash
-PYTHONPATH=src python3 -m ai_asset_inventory.upgrade restore --backup /absolute/path/to/.edgedisco/backups/TIMESTAMP
-```
-
-Database migrations and `PRAGMA user_version` commit in one transaction. This release migrates existing databases to version 2 for binary fingerprint evidence while preserving prior rows. Future schema changes must supply explicit migration steps. These backup/rollback guarantees apply to `install.sh`; running `edgedisco setup` directly does not snapshot the package.
-
-## Final installed-system test
-
-Do not switch an existing quick-installer installation to an editable developer setup just to test an upgrade. Run isolated regressions (`make check`) first; installer fixtures use real package installation and HTTP services but simulate `launchctl`, so they do not certify real LaunchAgent operation.
-
-From the source checkout containing the changes to test:
-
-```bash
-bash ./install.sh --yes --no-open
-edgedisco status
-edgedisco dashboard
-```
-
-The local installer installs this checkout into the managed venv and upgrades the existing configuration. The downloaded installer instead tests published `main`; it cannot test unpushed changes. Honor a custom `EDGEDISCO_HOME` if the existing installation uses one. Do not uninstall, purge, or replace the current configuration for this test.
-
-`edgedisco dashboard` creates a fresh one-time browser bootstrap, so developers do not need to display or copy the administrator token. The plain dashboard URL still requires an existing session or manual sign-in. Run `edgedisco demo` separately when synthetic lab evidence is wanted.
-
-Verify preserved device identity/custom settings, config version 2, healthy server and agent services, authenticated dashboard access, and fresh inventory. Start and stop an actual supported agent and refresh the dashboard after a polling interval. Finally start a fresh session in a hooked application and confirm new runtime events and session state. Synthetic demo or SDK events test transport, not native application hook invocation. No Full Disk Access, Accessibility, or Screen Recording permission should be required; stop and investigate unexpected prompts rather than granting them.
-
-## Uninstall
-
-Stop and remove the background services while keeping the local data:
+Remove the managed services, launcher, and EdgeDisco-managed app hooks while retaining data:
 
 ```bash
 edgedisco uninstall
 ```
 
-Uninstall also removes only the EdgeDisco-managed Cursor, Claude Code, and GitHub Copilot hooks. Unrelated application hooks are preserved.
-
-Delete the local credentials, logs, configuration, and evidence as well:
+Also delete local credentials, configuration, logs, backups, and evidence:
 
 ```bash
 edgedisco uninstall --purge
 ```
 
-The purge command asks for confirmation. The noninteractive equivalent is `--purge --yes`.
+The purge command asks for confirmation. Use `edgedisco uninstall --purge --yes` for a
+noninteractive purge.
 
 ## Troubleshooting
 
-If setup reports that port 8080 uses different credentials, either stop the old service or choose another port:
+If port 8080 is already occupied by a server using different credentials, rerun the installer with
+another port:
 
 ```bash
 bash install.sh --port 8090
 ```
 
-If no agent sessions appear:
+If `edgedisco` is not found after installation, open a new Terminal or run the managed launcher
+directly once:
 
-1. Confirm the app is listed under `Detected adapters` during setup.
-2. Restart the app after adapter installation.
-3. Run a new agent task, not only a normal chat.
-4. Send events immediately with `edgedisco agent send`.
-5. Check `~/.edgedisco/logs/agent.err.log`.
+```bash
+~/.local/bin/edgedisco status
+```
 
-## Managed enterprise rollout
+If agent sessions do not appear, restart the supported app after adapter installation, start a new
+agent task, run `edgedisco agent send --config ~/.edgedisco/agent.json`, and inspect the collector
+error log. Application inventory alone does not prove that an agent session ran.
 
-The self-service mode is intended for a local evaluation. For managed endpoints, host the API behind HTTPS, provision endpoint configuration through MDM, and run one per-user collector in each target user's graphical session. Do not convert it to a root LaunchDaemon: the scanner deliberately observes only its own user. Define retention and access controls and complete the [production hardening checklist](production-hardening.md). A future signed app distribution should use Apple's supported background-service APIs.
+The self-service mode is intended for local evaluation and controlled pilots. Before a broader
+rollout, complete the [production hardening checklist](production-hardening.md).

@@ -4,26 +4,23 @@ EdgeDisco provides an optional, read-only MCP server for interactive compliance 
 inventory synchronization. It does not expose prompts, responses, source code, credentials,
 environment values, command arguments, configuration URLs, or raw filesystem paths.
 
-## Install and run
+## Setup paths
 
-MCP support requires Python 3.10 or newer. Choose the installation path that matches how
-EdgeDisco was installed.
+Use the operating-system guide for complete managed installation, startup, endpoint, audit-log,
+and shutdown steps:
 
-### Self-service installation
+- [macOS MCP setup](deployment-macos.md#4-set-up-the-optional-mcp-server)
+- [Linux MCP setup](deployment-linux.md#4-set-up-the-optional-mcp-server)
 
-The self-service installer creates `~/.edgedisco/venv`, installs the `mcp` extra, and places an
-`edgedisco` launcher in `~/.local/bin`. Do not activate that virtual environment. After the
-installer has completed, run this command from any directory:
+Managed installations already include the MCP dependency when installed with Python 3.10 or
+newer. They do not create a background MCP service; `edgedisco mcp` is an optional foreground
+process. The rest of this page documents its tool and synchronization contract.
 
-```shell
-edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
-```
+## Manual source checkout
 
-### Source checkout
-
-For a checkout, run the local-extra install from the repository root. The `.[mcp]` form means
-“this checkout plus its MCP extra”; it is different from installing the package name from an
-index. The virtual environment may be activated, or its Python can be called explicitly:
+For development or an unsupported manual deployment, run the local-extra install from the
+repository root. The `.[mcp]` form means “this checkout plus its MCP extra.” The virtual
+environment may be activated, or its Python can be called explicitly:
 
 ```shell
 cd /path/to/edgedisco
@@ -35,8 +32,8 @@ edgedisco mcp --db ~/.edgedisco/data/inventory.db --host 127.0.0.1 --port 8081
 ```
 
 Without activation, use `.venv/bin/python -m pip` for installation and `.venv/bin/edgedisco` to
-run the server. The package-name form, `python -m pip install 'ai-asset-inventory[mcp]'`, works
-from any directory only when that package is available from the configured package index.
+run the server. A project-name install such as `ai-asset-inventory[mcp]` works from any directory
+only when that package is available from the configured package index.
 
 The Streamable HTTP endpoint is `http://127.0.0.1:8081/mcp`. The service is stateless and returns
 JSON responses. `--audit-log` selects a JSON Lines audit file; otherwise EdgeDisco writes
