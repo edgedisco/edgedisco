@@ -118,7 +118,9 @@ You can also run a one-shot collection and export directly from the terminal:
   `Content-Type: application/x-protobuf`.
 - Native encoder regression tests decode the wire payload and compare both asset observations and
   device heartbeats with the Python golden protobuf fixtures under `tests/fixtures/golden_otlp`.
-- The exporter uses an at-least-once transactional outbox pattern with exponential backoff and lease management.
+- The daemon polls the outbox every second independently of process scans. The exporter uses
+  at-least-once delivery with exponential backoff, honors a collector's bounded `Retry-After`,
+  and fences completions by lease ownership.
 - If the remote collector is temporarily offline, events remain staged in SQLite and are flushed upon reconnection.
 
 ---

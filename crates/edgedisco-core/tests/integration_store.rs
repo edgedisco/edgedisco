@@ -384,6 +384,7 @@ fn test_outbox_claiming_and_leasing() {
     let finished = store
         .finish_outbox(
             &["out-1", "out-2", "out-3"],
+            "lease-a",
             "delivered",
             None,
             Some(200),
@@ -401,6 +402,7 @@ fn test_outbox_claiming_and_leasing() {
     let retried = store
         .finish_outbox(
             &["out-4", "out-5"],
+            "lease-b",
             "retry",
             Some("transport"),
             Some(503),
@@ -453,4 +455,209 @@ fn test_expired_outbox_lease_is_recovered() {
         recovered[0].last_error_code.as_deref(),
         Some("lease_expired")
     );
+    assert!(!store
+        .begin_outbox_attempt(&["expired-1"], "lease-old", "2026-09-22T00:02:00Z")
+        .expect("stale attempt"));
+    assert!(store
+        .begin_outbox_attempt(&["expired-1"], "lease-new", "2026-09-22T00:02:00Z")
+        .expect("current attempt"));
+    assert_eq!(
+        store
+            .finish_outbox(
+                &["expired-1"],
+                "lease-old",
+                "delivered",
+                None,
+                Some(200),
+                "2026-09-22T00:02:00Z",
+            )
+            .expect("stale completion"),
+        0
+    );
+    assert_eq!(
+        store
+            .retry_outbox(
+                &["expired-1"],
+                "lease-old",
+                "transport",
+                None,
+                "2026-09-22T00:02:00Z",
+                "2026-09-22T00:04:00Z",
+            )
+            .expect("stale retry"),
+        0
+    );
+    let still_owned = store.get_outbox("expired-1").unwrap().unwrap();
+    assert_eq!(still_owned.status, "sending");
+    assert_eq!(still_owned.lease_id.as_deref(), Some("lease-new"));
+    assert_eq!(
+        store
+            .finish_outbox(
+                &["expired-1"],
+                "lease-new",
+                "delivered",
+                None,
+                Some(200),
+                "2026-09-22T00:02:00Z",
+            )
+            .expect("current completion"),
+        1
+    );
+    assert_eq!(
+        store
+            .get_outbox("expired-1")
+            .unwrap()
+            .unwrap()
+            .attempt_count,
+        1
+    );
+}
+
+#[test]
+fn outbox_attempt_and_delivery_counters_track_current_lease() {
+    let directory = tempdir().expect("temporary database");
+    let path = directory.path().join("inventory.db");
+    let store = Store::open(&path).expect("store");
+    for (id, asset) in [("counter-a", "asset-a"), ("counter-b", "asset-b")] {
+        store
+            .insert_outbox(&OutboxRecord::new(
+                id,
+                asset,
+                "{}",
+                2,
+                "2026-09-22T00:00:00Z",
+                "2026-09-22T00:00:00Z",
+            ))
+            .expect("enqueue");
+    }
+    assert_eq!(
+        store
+            .claim_outbox(
+                2,
+                1024,
+                "counter-lease",
+                "2026-09-22T00:05:00Z",
+                "2026-09-22T00:00:00Z",
+            )
+            .expect("claim")
+            .len(),
+        2
+    );
+    assert!(store
+        .begin_outbox_attempt(
+            &["counter-a", "counter-b"],
+            "counter-lease",
+            "2026-09-22T00:00:00Z",
+        )
+        .expect("begin attempt"));
+    assert_eq!(
+        store
+            .retry_outbox(
+                &["counter-a"],
+                "counter-lease",
+                "http_retryable",
+                Some(503),
+                "2026-09-22T00:00:00Z",
+                "2026-09-22T00:02:00Z",
+            )
+            .expect("retry"),
+        1
+    );
+    assert_eq!(
+        store
+            .finish_outbox(
+                &["counter-b"],
+                "counter-lease",
+                "delivered",
+                None,
+                Some(200),
+                "2026-09-22T00:00:00Z",
+            )
+            .expect("deliver"),
+        1
+    );
+    let connection = Connection::open(path).expect("read status");
+    let totals: (i64, i64, i64, i64) = connection
+        .query_row(
+            "SELECT attempted_events_total, retried_events_total, delivered_events_total, failed_events_total FROM otlp_export_status WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("export totals");
+    assert_eq!(totals, (2, 1, 1, 0));
+    assert_eq!(
+        store
+            .get_outbox("counter-a")
+            .unwrap()
+            .unwrap()
+            .attempt_count,
+        1
+    );
+    assert_eq!(
+        store
+            .get_outbox("counter-b")
+            .unwrap()
+            .unwrap()
+            .attempt_count,
+        1
+    );
+}
+
+#[test]
+fn permanent_export_failure_releases_dedup_state_for_next_scan() {
+    let directory = tempdir().expect("temporary database");
+    let path = directory.path().join("inventory.db");
+    let store = Store::open(&path).expect("store");
+    store
+        .insert_outbox(&OutboxRecord::new(
+            "failed-export",
+            "failed-asset",
+            "{}",
+            2,
+            "2026-09-22T00:00:00Z",
+            "2026-09-22T00:00:00Z",
+        ))
+        .expect("enqueue");
+    store
+        .claim_outbox(
+            1,
+            1024,
+            "failed-lease",
+            "2026-09-22T00:05:00Z",
+            "2026-09-22T00:00:00Z",
+        )
+        .expect("claim");
+    assert!(store
+        .begin_outbox_attempt(&["failed-export"], "failed-lease", "2026-09-22T00:00:00Z")
+        .expect("begin"));
+    assert_eq!(
+        store
+            .finish_outbox(
+                &["failed-export"],
+                "failed-lease",
+                "failed",
+                Some("http_permanent"),
+                Some(400),
+                "2026-09-22T00:00:00Z",
+            )
+            .expect("fail"),
+        1
+    );
+    let connection = Connection::open(path).expect("read status");
+    let dedup_rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM otlp_asset_state WHERE asset_key='failed-asset'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("dedup state");
+    assert_eq!(dedup_rows, 0);
+    let failed: i64 = connection
+        .query_row(
+            "SELECT failed_events_total FROM otlp_export_status WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("failure total");
+    assert_eq!(failed, 1);
 }

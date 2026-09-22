@@ -119,6 +119,24 @@ pub fn retry_delay(initial: Duration, maximum: Duration, attempt_count: u32) -> 
     initial.saturating_mul(factor).min(maximum)
 }
 
+fn retry_after_seconds(value: Option<&header::HeaderValue>, now: &str) -> u64 {
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return 0;
+    };
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse::<u64>().unwrap_or(u64::MAX).min(300);
+    }
+    let Some(now) = parse_timestamp(now).ok() else {
+        return 0;
+    };
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|date| date.signed_duration_since(now).num_seconds().max(0) as u64)
+        .unwrap_or(0)
+        .min(300)
+}
+
 fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, ExportError> {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
@@ -662,6 +680,7 @@ impl OtlpExporter {
                 Err(_) => {
                     store.finish_outbox(
                         &[record.id.as_str()],
+                        &lease_id,
                         "failed",
                         Some("invalid_payload"),
                         None,
@@ -697,6 +716,13 @@ impl OtlpExporter {
             .max()
             .unwrap_or(0)
             .max(0) as u32;
+        if !store.begin_outbox_attempt(&ids, &lease_id, now)? {
+            return Ok(ExportOutcome {
+                claimed: records.len(),
+                failed: invalid_count,
+                ..Default::default()
+            });
+        }
 
         let mut request = self
             .client
@@ -712,6 +738,8 @@ impl OtlpExporter {
         match request.body(payload).send().await {
             Ok(mut response) => {
                 let status = response.status().as_u16();
+                let retry_after =
+                    retry_after_seconds(response.headers().get(header::RETRY_AFTER), now);
                 let mut body = Vec::new();
                 let mut response_error = response
                     .content_length()
@@ -735,8 +763,14 @@ impl OtlpExporter {
                         )
                         .as_secs(),
                     )?;
-                    let retried =
-                        store.retry_outbox(&ids, "transport", Some(status.into()), now, &next)?;
+                    let retried = store.retry_outbox(
+                        &ids,
+                        &lease_id,
+                        "transport",
+                        Some(status.into()),
+                        now,
+                        &next,
+                    )?;
                     return Ok(ExportOutcome {
                         claimed: records.len(),
                         retried,
@@ -750,6 +784,7 @@ impl OtlpExporter {
                         Ok(false) => {
                             let delivered = store.finish_outbox(
                                 &ids,
+                                &lease_id,
                                 "delivered",
                                 None,
                                 Some(status.into()),
@@ -766,6 +801,7 @@ impl OtlpExporter {
                         Ok(true) => {
                             let failed = store.finish_outbox(
                                 &ids,
+                                &lease_id,
                                 "failed",
                                 Some("partial_success"),
                                 Some(status.into()),
@@ -790,6 +826,7 @@ impl OtlpExporter {
                             )?;
                             let retried = store.retry_outbox(
                                 &ids,
+                                &lease_id,
                                 "invalid_response",
                                 Some(status.into()),
                                 now,
@@ -812,10 +849,12 @@ impl OtlpExporter {
                             self.config.max_backoff,
                             attempt_count,
                         )
-                        .as_secs(),
+                        .as_secs()
+                        .max(retry_after),
                     )?;
                     let retried = store.retry_outbox(
                         &ids,
+                        &lease_id,
                         "http_retryable",
                         Some(status.into()),
                         now,
@@ -831,6 +870,7 @@ impl OtlpExporter {
                 } else {
                     let failed = store.finish_outbox(
                         &ids,
+                        &lease_id,
                         "failed",
                         Some("http_permanent"),
                         Some(status.into()),
@@ -854,7 +894,7 @@ impl OtlpExporter {
                     )
                     .as_secs(),
                 )?;
-                let retried = store.retry_outbox(&ids, "transport", None, now, &next)?;
+                let retried = store.retry_outbox(&ids, &lease_id, "transport", None, now, &next)?;
                 Ok(ExportOutcome {
                     claimed: records.len(),
                     retried,
@@ -914,5 +954,21 @@ mod tests {
             assert!(!error.to_string().contains("SECRET"));
             assert!(!format!("{config:?}").contains("SECRET"));
         }
+    }
+
+    #[test]
+    fn retry_after_supports_seconds_and_http_dates_with_a_cap() {
+        let now = "2026-09-22T00:00:00Z";
+        for (value, expected) in [
+            ("120", 120),
+            ("600", 300),
+            ("Tue, 22 Sep 2026 00:00:30 GMT", 30),
+            ("Mon, 21 Sep 2026 23:59:30 GMT", 0),
+            ("nonsense", 0),
+        ] {
+            let header = header::HeaderValue::from_str(value).unwrap();
+            assert_eq!(retry_after_seconds(Some(&header), now), expected);
+        }
+        assert_eq!(retry_after_seconds(None, now), 0);
     }
 }

@@ -4,6 +4,7 @@ use crate::util::{
     current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
     get_os_version, local_device_id, random_token_hash,
 };
+use edgedisco_core::exporter::{ExportError, OtlpExporter};
 use edgedisco_core::models::Device;
 use edgedisco_core::store::Store;
 use std::collections::BTreeSet;
@@ -46,13 +47,7 @@ pub fn run_daemon_iteration(store: &Store) -> Result<usize, Box<dyn std::error::
     super::scan::persist_scan_report_to_store(store, &report)
 }
 
-async fn export_outbox_if_configured(
-    store: &Store,
-    args: &DaemonArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(exporter) = &args.otlp_exporter else {
-        return Ok(());
-    };
+async fn export_outbox_once(store: &Store, exporter: &OtlpExporter) -> Result<(), ExportError> {
     let outcome = exporter.export_once_at(store, &current_timestamp()).await?;
     if outcome.claimed > 0 {
         eprintln!(
@@ -64,6 +59,41 @@ async fn export_outbox_if_configured(
         );
     }
     Ok(())
+}
+
+async fn export_outbox_if_configured(
+    store: &Store,
+    args: &DaemonArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(exporter) = &args.otlp_exporter {
+        export_outbox_once(store, exporter).await?;
+    }
+    Ok(())
+}
+
+fn spawn_export_worker(
+    store: Arc<Store>,
+    exporter: OtlpExporter,
+    mut shutdown: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = interval.tick() => {
+                    let result = tokio::select! {
+                        _ = shutdown.changed() => break,
+                        result = export_outbox_once(&store, &exporter) => result,
+                    };
+                    if result.is_err() {
+                        eprintln!("[{}] OTLP export error", current_timestamp());
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn ipc_config(args: &DaemonArgs) -> Result<IpcConfig, Box<dyn std::error::Error>> {
@@ -146,6 +176,13 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
     let server = IpcServer::bind(policy, Arc::clone(&store), Arc::clone(&state), scan_tx).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let ipc_task = tokio::spawn(server.serve(shutdown_rx));
+    let export_task = args.otlp_exporter.as_ref().map(|exporter| {
+        spawn_export_worker(
+            Arc::clone(&store),
+            (**exporter).clone(),
+            shutdown_tx.subscribe(),
+        )
+    });
 
     let interval_duration = Duration::from_secs(args.interval);
     let mut interval = tokio::time::interval(interval_duration);
@@ -156,9 +193,6 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
                 match run_and_record_scan(&store, &state) {
                     Ok(count) => {
                         eprintln!("[{}] Observation pass complete: {} assets", current_timestamp(), count);
-                        if let Err(e) = export_outbox_if_configured(&store, args).await {
-                            eprintln!("[{}] OTLP export error: {}", current_timestamp(), e);
-                        }
                     }
                     Err(e) => {
                         eprintln!("[{}] Error during observation pass: {}", current_timestamp(), e);
@@ -178,5 +212,89 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     let _ = shutdown_tx.send(true);
     ipc_task.await??;
+    if let Some(export_task) = export_task {
+        export_task.await?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edgedisco_core::exporter::ExporterConfig;
+    use edgedisco_core::models::OutboxRecord;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn export_worker_delivers_queued_record_without_a_scan() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("collector listener");
+        let address = listener.local_addr().expect("collector address");
+        let collector = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("collector connection");
+            let mut received = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 4096];
+                let size = stream.read(&mut chunk).await.expect("request bytes");
+                assert!(size > 0, "request ended before body");
+                received.extend_from_slice(&chunk[..size]);
+                if let Some(header_end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..header_end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':').and_then(|(name, value)| {
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                        })
+                        .expect("content length");
+                    if received.len() >= header_end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .expect("collector response");
+        });
+
+        let store = Arc::new(Store::open_in_memory().expect("store"));
+        let payload = include_str!("../../../../tests/fixtures/golden_otlp/observation_v2.json");
+        let now = current_timestamp();
+        store
+            .insert_outbox(&OutboxRecord::new(
+                "worker-record",
+                "worker-asset",
+                payload,
+                payload.len() as i64,
+                &now,
+                &now,
+            ))
+            .expect("queue record");
+        let exporter = OtlpExporter::new(ExporterConfig::for_endpoint(format!(
+            "http://{address}/v1/logs"
+        )))
+        .expect("exporter");
+        let (shutdown, receiver) = watch::channel(false);
+        let worker = spawn_export_worker(Arc::clone(&store), exporter, receiver);
+        tokio::time::timeout(Duration::from_secs(3), collector)
+            .await
+            .expect("collector received request")
+            .expect("collector task");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if store.get_outbox("worker-record").unwrap().unwrap().status == "delivered" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("worker marked event delivered");
+        shutdown.send(true).expect("shutdown worker");
+        worker.await.expect("worker task");
+    }
 }

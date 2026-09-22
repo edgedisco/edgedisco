@@ -18,6 +18,7 @@ struct CapturedRequest {
 fn spawn_http_server(
     statuses: Vec<u16>,
     compressed: bool,
+    retry_after: Option<&'static str>,
 ) -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
     let address = listener.local_addr().expect("server address");
@@ -75,9 +76,13 @@ fn spawn_http_server(
             } else {
                 "Server Error"
             };
+            let retry_header = retry_after
+                .filter(|_| status == 503)
+                .map(|value| format!("Retry-After: {value}\r\n"))
+                .unwrap_or_default();
             write!(
                 stream,
-                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/x-protobuf\r\n{retry_header}Content-Length: 0\r\nConnection: close\r\n\r\n"
             )
             .expect("write response");
         }
@@ -104,7 +109,7 @@ async fn retries_with_exponential_backoff_then_marks_accepted_batch_delivered() 
     store
         .insert_outbox(&pending_record())
         .expect("insert event");
-    let (endpoint, server) = spawn_http_server(vec![503, 202], false);
+    let (endpoint, server) = spawn_http_server(vec![503, 202], false, None);
     let mut config = ExporterConfig::for_endpoint(endpoint);
     config.batch_records = 10;
     config.batch_bytes = 1024 * 1024;
@@ -166,12 +171,32 @@ async fn retries_with_exponential_backoff_then_marks_accepted_batch_delivered() 
 }
 
 #[tokio::test]
+async fn retry_after_header_defers_next_attempt() {
+    let store = Store::open_in_memory().expect("store");
+    store
+        .insert_outbox(&pending_record())
+        .expect("insert event");
+    let (endpoint, server) = spawn_http_server(vec![503], false, Some("120"));
+    let exporter = OtlpExporter::new(ExporterConfig::for_endpoint(endpoint)).expect("exporter");
+
+    let outcome = exporter
+        .export_once_at(&store, "2026-09-22T00:00:00Z")
+        .await
+        .expect("collector retry");
+    assert_eq!(outcome.retried, 1);
+    let record = store.get_outbox("out-1").unwrap().unwrap();
+    assert_eq!(record.next_attempt_at, "2026-09-22T00:02:00Z");
+    assert_eq!(record.last_error_code.as_deref(), Some("http_retryable"));
+    assert_eq!(server.join().expect("collector thread").len(), 1);
+}
+
+#[tokio::test]
 async fn gzip_and_custom_headers_reach_collector_without_changing_protobuf() {
     let store = Store::open_in_memory().expect("store");
     store
         .insert_outbox(&pending_record())
         .expect("insert event");
-    let (endpoint, server) = spawn_http_server(vec![200], true);
+    let (endpoint, server) = spawn_http_server(vec![200], true, None);
     let mut config = ExporterConfig::for_endpoint(endpoint);
     config.compression = true;
     config.headers = Some("Authorization=Bearer%20SECRET,x-trace=a%2Cb%3Dc".into());

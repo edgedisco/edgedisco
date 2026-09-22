@@ -1,6 +1,6 @@
 use crate::models::{Asset, Device, OutboxRecord, ScanReport, Session};
 use crate::redaction::{sha256_digest, validate_report};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1364,10 +1364,47 @@ impl Store {
         Ok(claimed)
     }
 
+    /// Confirm ownership immediately before I/O and record the attempt.
+    pub fn begin_outbox_attempt(
+        &self,
+        ids: &[&str],
+        lease_id: &str,
+        now: &str,
+    ) -> Result<bool, StoreError> {
+        if ids.is_empty() {
+            return Ok(false);
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for &id in ids {
+            let owned: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM otlp_outbox WHERE id=?1 AND status='sending' AND lease_id=?2 AND lease_expires_at>?3",
+                params![id, lease_id, now],
+                |row| row.get(0),
+            )?;
+            if owned != 1 {
+                return Ok(false);
+            }
+        }
+        for &id in ids {
+            tx.execute(
+                "UPDATE otlp_outbox SET attempt_count=attempt_count+1, last_attempt_at=?1 WHERE id=?2",
+                params![now, id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE otlp_export_status SET attempted_events_total=attempted_events_total+?1, last_attempt_at=?2 WHERE id=1",
+            params![ids.len() as i64, now],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Mark claimed records for retry and schedule the next exponential-backoff attempt.
     pub fn retry_outbox(
         &self,
         ids: &[&str],
+        lease_id: &str,
         error_code: &str,
         http_status: Option<i64>,
         now: &str,
@@ -1380,13 +1417,19 @@ impl Store {
             updated_count += conn.execute(
                 r#"
                 UPDATE otlp_outbox
-                SET status = 'retry', attempt_count = attempt_count + 1,
+                SET status = 'retry',
                     next_attempt_at = ?1, last_error_code = ?2,
                     last_http_status = ?3, last_attempt_at = ?4,
                     lease_id = NULL, lease_expires_at = NULL
-                WHERE id = ?5 AND status = 'sending'
+                WHERE id = ?5 AND status = 'sending' AND lease_id = ?6 AND lease_expires_at > ?4
                 "#,
-                params![next_attempt_at, error_code, http_status, now, id],
+                params![next_attempt_at, error_code, http_status, now, id, lease_id],
+            )?;
+        }
+        if updated_count > 0 {
+            conn.execute(
+                "UPDATE otlp_export_status SET retried_events_total=retried_events_total+?1, last_failure_at=?2, last_failure_code=?3, last_http_status=?4 WHERE id=1",
+                params![updated_count as i64, now, error_code, http_status],
             )?;
         }
         conn.execute("COMMIT", [])?;
@@ -1397,11 +1440,15 @@ impl Store {
     pub fn finish_outbox(
         &self,
         ids: &[&str],
+        lease_id: &str,
         status: &str,
         error_code: Option<&str>,
         http_status: Option<i64>,
         now: &str,
     ) -> Result<usize, StoreError> {
+        if !matches!(status, "delivered" | "failed" | "retry") {
+            return Err(StoreError::InvalidArgument("invalid outbox status".into()));
+        }
         let conn = self.conn.lock().unwrap();
         conn.execute("BEGIN IMMEDIATE", [])?;
 
@@ -1419,13 +1466,50 @@ impl Store {
                 UPDATE otlp_outbox
                 SET status = ?1, last_error_code = ?2, last_http_status = ?3,
                     delivered_at = ?4, failed_at = ?5, lease_id = NULL, lease_expires_at = NULL
-                WHERE id = ?6
+                WHERE id = ?6 AND status = 'sending' AND lease_id = ?7 AND lease_expires_at > ?8
                 "#,
-                params![status, error_code, http_status, delivered_at, failed_at, id],
+                params![
+                    status,
+                    error_code,
+                    http_status,
+                    delivered_at,
+                    failed_at,
+                    id,
+                    lease_id,
+                    now
+                ],
             )?;
             updated_count += count;
+            if count > 0 && status == "failed" {
+                conn.execute(
+                    "DELETE FROM otlp_asset_state WHERE last_outbox_id=?1",
+                    params![id],
+                )?;
+            }
         }
 
+        if updated_count > 0 {
+            let counter = match status {
+                "delivered" => "delivered_events_total",
+                "failed" => "failed_events_total",
+                _ => "retried_events_total",
+            };
+            conn.execute(
+                &format!("UPDATE otlp_export_status SET {counter}={counter}+?1, last_http_status=?2 WHERE id=1"),
+                params![updated_count as i64, http_status],
+            )?;
+            if status == "delivered" {
+                conn.execute(
+                    "UPDATE otlp_export_status SET last_success_at=?1 WHERE id=1",
+                    params![now],
+                )?;
+            } else {
+                conn.execute(
+                    "UPDATE otlp_export_status SET last_failure_at=?1, last_failure_code=?2 WHERE id=1",
+                    params![now, error_code],
+                )?;
+            }
+        }
         conn.execute("COMMIT", [])?;
         Ok(updated_count)
     }
@@ -1586,6 +1670,7 @@ mod tests {
         let finished = store
             .finish_outbox(
                 &["out-1"],
+                "lease-123",
                 "delivered",
                 None,
                 Some(200),
