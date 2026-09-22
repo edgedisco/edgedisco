@@ -8,15 +8,23 @@ Contributions that improve detection quality, privacy, portability, tests, or en
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
-make test
+make check
 edgedisco demo
 ```
 
-`make test` is the canonical test command from a source checkout. After the editable install, `edgedisco` is on your PATH only while `.venv` is active; without activation use `.venv/bin/edgedisco`.
+`make check` is the canonical validation command from a source checkout. After the editable install, `edgedisco` is on your PATH only while `.venv` is active; without activation use `.venv/bin/edgedisco`.
+
+The command above installs the core package. To work on the optional integrations, run this from the repository root while the virtual environment is active:
+
+```bash
+python -m pip install -e '.[mcp,otlp]'
+```
+
+The `mcp` extra requires Python 3.10+; the core supports Python 3.9+.
 
 Self-service installs keep the package inside `~/.edgedisco/venv` as an implementation detail and expose a stable `edgedisco` command for normal Terminal sessions.
 
-The runtime intentionally has no third-party Python dependencies. Discuss any new runtime dependency before adding it.
+The core runtime intentionally has no third-party Python dependencies. Discuss any new core runtime dependency before adding it.
 
 ## Pull requests
 

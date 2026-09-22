@@ -33,17 +33,14 @@ def _free_port() -> int:
 
 
 class InstallerTests(unittest.TestCase):
-    def test_readme_documents_streamed_and_downloaded_installers(self):
+    def test_readme_uses_one_line_installer_and_links_platform_guides(self):
         self.assertIn(
             "curl -fsSL https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh | bash",
             README,
         )
-        self.assertIn(
-            "curl -fsSLO https://raw.githubusercontent.com/edgedisco/edgedisco/main/install.sh\n"
-            "less install.sh\n"
-            "bash install.sh",
-            README,
-        )
+        self.assertIn("docs/deployment-macos.md", README)
+        self.assertIn("docs/deployment-linux.md", README)
+        self.assertNotIn("curl -fsSLO", README)
 
     def test_setup_cannot_consume_piped_installer_input(self):
         self.assertIn('"$CLI" setup "${SETUP_ARGS[@]}" </dev/null', SCRIPT)
