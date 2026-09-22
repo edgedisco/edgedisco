@@ -53,6 +53,13 @@ else
 fi
 
 for protected_path in \
+    "$ROOT/Applications" \
+    "$ROOT/Applications/EdgeDisco.app" \
+    "$ROOT/Applications/EdgeDisco.app/Contents" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/Info.plist" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/MacOS" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/MacOS/EdgeDiscoMenuBar" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/Resources" \
     "$ROOT/Library" \
     "$ROOT/Library/Application Support" \
     "$ROOT/Library/Application Support/EdgeDisco" \
@@ -100,6 +107,7 @@ fi
     "$ROOT/Library/LaunchDaemons/com.edgedisco.daemon.plist" \
     "$ROOT/Library/LaunchAgents/com.edgedisco.agent.plist" \
     "$ROOT/var/run/edgedisco.sock"
+/bin/rm -rf "$ROOT/Applications/EdgeDisco.app"
 
 if [ "$PURGE" -eq 1 ]; then
     /bin/rm -rf "$ROOT/Library/Application Support/EdgeDisco"

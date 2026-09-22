@@ -30,7 +30,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for tool in cargo pkgbuild productbuild plutil; do
+for tool in cargo pkgbuild productbuild plutil swift; do
     command -v "$tool" >/dev/null 2>&1 || { printf 'required tool not found: %s\n' "$tool" >&2; exit 69; }
 done
 
@@ -46,11 +46,26 @@ case "$(file -b "$BINARY")" in
     *) printf 'native binary is not a Mach-O executable: %s\n' "$BINARY" >&2; exit 65 ;;
 esac
 
+SWIFT_PACKAGE="$REPO/macos/EdgeDiscoMenuBar"
+(cd "$SWIFT_PACKAGE" && swift build -c release)
+SWIFT_BIN_DIR=$(cd "$SWIFT_PACKAGE" && swift build -c release --show-bin-path)
+MENU_BAR_BINARY="$SWIFT_BIN_DIR/EdgeDiscoMenuBar"
+[ -f "$MENU_BAR_BINARY" ] && [ -x "$MENU_BAR_BINARY" ] || {
+    printf 'menu bar binary is missing or not executable: %s\n' "$MENU_BAR_BINARY" >&2
+    exit 66
+}
+case "$(file -b "$MENU_BAR_BINARY")" in
+    *Mach-O*executable*) ;;
+    *) printf 'menu bar binary is not a Mach-O executable: %s\n' "$MENU_BAR_BINARY" >&2; exit 65 ;;
+esac
+
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/edgedisco-pkg.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 ROOT="$WORK/root"
 COMPONENT="$WORK/EdgeDisco.pkg"
 mkdir -p "$ROOT/usr/local/libexec/edgedisco" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/MacOS" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/Resources" \
     "$ROOT/Library/LaunchDaemons" \
     "$ROOT/Library/LaunchAgents" \
     "$ROOT/Library/Application Support/EdgeDisco/config" \
@@ -58,6 +73,21 @@ mkdir -p "$ROOT/usr/local/libexec/edgedisco" \
     "$ROOT/Library/Application Support/EdgeDisco/data" \
     "$OUTPUT_DIR"
 install -m 0755 "$BINARY" "$ROOT/usr/local/libexec/edgedisco/edgedisco"
+install -m 0755 "$MENU_BAR_BINARY" "$ROOT/Applications/EdgeDisco.app/Contents/MacOS/EdgeDiscoMenuBar"
+APP_INFO="$ROOT/Applications/EdgeDisco.app/Contents/Info.plist"
+plutil -create xml1 "$APP_INFO"
+plutil -insert CFBundleDevelopmentRegion -string en "$APP_INFO"
+plutil -insert CFBundleExecutable -string EdgeDiscoMenuBar "$APP_INFO"
+plutil -insert CFBundleIdentifier -string com.edgedisco.menubar "$APP_INFO"
+plutil -insert CFBundleInfoDictionaryVersion -string 6.0 "$APP_INFO"
+plutil -insert CFBundleName -string EdgeDisco "$APP_INFO"
+plutil -insert CFBundlePackageType -string APPL "$APP_INFO"
+plutil -insert CFBundleShortVersionString -string "$VERSION" "$APP_INFO"
+plutil -insert CFBundleVersion -string "$VERSION" "$APP_INFO"
+plutil -insert LSMinimumSystemVersion -string 13.0 "$APP_INFO"
+plutil -insert LSUIElement -bool true "$APP_INFO"
+plutil -lint "$APP_INFO" >/dev/null
+chmod 0644 "$APP_INFO"
 install -m 0644 "$SCRIPT_DIR/launchd/com.edgedisco.daemon.plist" "$ROOT/Library/LaunchDaemons/com.edgedisco.daemon.plist"
 install -m 0644 "$SCRIPT_DIR/launchd/com.edgedisco.agent.plist" "$ROOT/Library/LaunchAgents/com.edgedisco.agent.plist"
 chmod 0755 \
@@ -66,6 +96,11 @@ chmod 0755 \
     "$ROOT/usr/local" \
     "$ROOT/usr/local/libexec" \
     "$ROOT/usr/local/libexec/edgedisco" \
+    "$ROOT/Applications" \
+    "$ROOT/Applications/EdgeDisco.app" \
+    "$ROOT/Applications/EdgeDisco.app/Contents" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/MacOS" \
+    "$ROOT/Applications/EdgeDisco.app/Contents/Resources" \
     "$ROOT/Library" \
     "$ROOT/Library/Application Support" \
     "$ROOT/Library/LaunchDaemons" \

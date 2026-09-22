@@ -66,11 +66,13 @@ package_version=$(xmllint --xpath 'string(/pkg-info/@version)' "$PACKAGE_INFO")
 }
 
 binary="$PAYLOAD/usr/local/libexec/edgedisco/edgedisco"
+app_binary="$PAYLOAD/Applications/EdgeDisco.app/Contents/MacOS/EdgeDiscoMenuBar"
+app_info="$PAYLOAD/Applications/EdgeDisco.app/Contents/Info.plist"
 daemon_plist="$PAYLOAD/Library/LaunchDaemons/com.edgedisco.daemon.plist"
 agent_plist="$PAYLOAD/Library/LaunchAgents/com.edgedisco.agent.plist"
 preinstall="$SCRIPTS/preinstall"
 postinstall="$SCRIPTS/postinstall"
-for required in "$binary" "$daemon_plist" "$agent_plist" "$preinstall" "$postinstall"; do
+for required in "$binary" "$app_binary" "$app_info" "$daemon_plist" "$agent_plist" "$preinstall" "$postinstall"; do
     [ -f "$required" ] && [ ! -L "$required" ] || {
         printf 'required release input is missing or unsafe: %s\n' "$required" >&2
         exit 65
@@ -83,8 +85,8 @@ payload_object_count=$(find "$PAYLOAD" -print | wc -l | tr -d ' ')
 script_file_count=$(find "$SCRIPTS" -type f -print | wc -l | tr -d ' ')
 script_object_count=$(find "$SCRIPTS" -print | wc -l | tr -d ' ')
 links=$(find "$PAYLOAD" "$SCRIPTS" -type l -print)
-if [ "$payload_file_count" -ne 3 ] || [ "$payload_dir_count" -ne 13 ] || \
-   [ "$payload_object_count" -ne 16 ] || [ "$script_file_count" -ne 2 ] || \
+if [ "$payload_file_count" -ne 5 ] || [ "$payload_dir_count" -ne 18 ] || \
+   [ "$payload_object_count" -ne 23 ] || [ "$script_file_count" -ne 2 ] || \
    [ "$script_object_count" -ne 3 ] || [ -n "$links" ]; then
     printf '%s\n' "unexpected payload or scripts in release input" >&2
     exit 65
@@ -105,7 +107,23 @@ cmp -s "$postinstall" "$SCRIPT_DIR/scripts/postinstall" || {
     printf '%s\n' "unexpected postinstall content" >&2
     exit 65
 }
-plutil -lint "$daemon_plist" "$agent_plist" >/dev/null
+plutil -lint "$app_info" "$daemon_plist" "$agent_plist" >/dev/null
+[ "$(plutil -extract CFBundleExecutable raw -o - "$app_info")" = "EdgeDiscoMenuBar" ] || {
+    printf '%s\n' "unexpected application executable in Info.plist" >&2
+    exit 65
+}
+[ "$(plutil -extract CFBundleIdentifier raw -o - "$app_info")" = "com.edgedisco.menubar" ] || {
+    printf '%s\n' "unexpected application identifier in Info.plist" >&2
+    exit 65
+}
+[ "$(plutil -extract CFBundleVersion raw -o - "$app_info")" = "$VERSION" ] || {
+    printf '%s\n' "unexpected application version in Info.plist" >&2
+    exit 65
+}
+[ "$(plutil -extract LSUIElement raw -o - "$app_info")" = "true" ] || {
+    printf '%s\n' "LSUIElement must be true in Info.plist" >&2
+    exit 65
+}
 require_mode() {
     expected_mode=$2
     actual_mode=$(stat -f '%Lp' "$1")
@@ -123,6 +141,13 @@ require_bom_root_wheel() {
     fi
 }
 require_mode "$binary" 755
+require_mode "$app_binary" 755
+require_mode "$app_info" 644
+require_mode "$PAYLOAD/Applications" 755
+require_mode "$PAYLOAD/Applications/EdgeDisco.app" 755
+require_mode "$PAYLOAD/Applications/EdgeDisco.app/Contents" 755
+require_mode "$PAYLOAD/Applications/EdgeDisco.app/Contents/MacOS" 755
+require_mode "$PAYLOAD/Applications/EdgeDisco.app/Contents/Resources" 755
 require_mode "$PAYLOAD/usr" 755
 require_mode "$PAYLOAD/usr/local" 755
 require_mode "$PAYLOAD/usr/local/libexec" 755
@@ -140,6 +165,13 @@ require_mode "$PAYLOAD/Library/Application Support/EdgeDisco/data" 700
 require_mode "$preinstall" 755
 require_mode "$postinstall" 755
 for owned_path in \
+    "Applications" \
+    "Applications/EdgeDisco.app" \
+    "Applications/EdgeDisco.app/Contents" \
+    "Applications/EdgeDisco.app/Contents/Info.plist" \
+    "Applications/EdgeDisco.app/Contents/MacOS" \
+    "Applications/EdgeDisco.app/Contents/MacOS/EdgeDiscoMenuBar" \
+    "Applications/EdgeDisco.app/Contents/Resources" \
     "usr" \
     "usr/local" \
     "usr/local/libexec" \
@@ -161,6 +193,10 @@ done
 case "$(file -b "$binary")" in
     *Mach-O*executable*) ;;
     *) printf '%s\n' "unexpected payload binary: native Mach-O executable required" >&2; exit 65 ;;
+esac
+case "$(file -b "$app_binary")" in
+    *Mach-O*executable*) ;;
+    *) printf '%s\n' "unexpected menu bar binary: native Mach-O executable required" >&2; exit 65 ;;
 esac
 
 if [ "$PLAN" -eq 1 ]; then

@@ -12,6 +12,9 @@ DAEMON_PLIST = Path("Library/LaunchDaemons/com.edgedisco.daemon.plist")
 AGENT_PLIST = Path("Library/LaunchAgents/com.edgedisco.agent.plist")
 SOCKET = Path("var/run/edgedisco.sock")
 SUPPORT = Path("Library/Application Support/EdgeDisco")
+APP = Path("Applications/EdgeDisco.app")
+APP_BINARY = APP / "Contents/MacOS/EdgeDiscoMenuBar"
+APP_INFO = APP / "Contents/Info.plist"
 
 
 def run_uninstall(
@@ -40,7 +43,7 @@ def run_uninstall(
 
 
 def seed_install(root: Path) -> tuple[Path, Path]:
-    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET):
+    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET, APP_BINARY, APP_INFO):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"fixture:{relative}".encode())
@@ -71,8 +74,9 @@ def test_default_removes_package_files_and_preserves_runtime_data(tmp_path: Path
     result = run_uninstall(root, lifecycle_log=lifecycle)
 
     assert result.returncode == 0, result.stderr
-    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET):
+    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET, APP_BINARY, APP_INFO):
         assert not (root / relative).exists()
+    assert not (root / APP).exists()
     assert (digest(inventory), digest(wal)) == before
     assert (root / SUPPORT / "config/settings.toml").is_file()
     assert (root / SUPPORT / "logs/daemon.log").is_file()
@@ -108,7 +112,7 @@ def test_help_and_unknown_flag_are_bounded_and_non_mutating(tmp_path: Path):
     assert unknown.returncode != 0
     assert "usage:" in unknown.stderr.lower()
     assert (digest(inventory), digest(wal)) == before
-    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET):
+    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET, APP_BINARY, APP_INFO):
         assert (root / relative).exists()
 
 
@@ -157,7 +161,7 @@ def test_staged_missing_services_log_intent_without_running_lifecycle_tools(
 def test_symlink_in_package_owned_path_is_refused_before_any_mutation(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
-    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET):
+    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET, APP_BINARY, APP_INFO):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"must remain")
@@ -175,7 +179,7 @@ def test_symlink_in_package_owned_path_is_refused_before_any_mutation(tmp_path: 
     assert result.returncode == 65
     assert "refusing symlink" in result.stderr.lower()
     assert digest(protected) == before
-    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET):
+    for relative in (BINARY, DAEMON_PLIST, AGENT_PLIST, SOCKET, APP_BINARY, APP_INFO):
         assert (root / relative).read_bytes() == b"must remain"
 
 

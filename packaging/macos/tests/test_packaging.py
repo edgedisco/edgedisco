@@ -16,10 +16,14 @@ DAEMON_PLIST = MACOS / "launchd" / "com.edgedisco.daemon.plist"
 AGENT_PLIST = MACOS / "launchd" / "com.edgedisco.agent.plist"
 BUILD = MACOS / "build-pkg.sh"
 RELEASE = MACOS / "release.sh"
+UNINSTALL = MACOS / "uninstall.sh"
 PREINSTALL = MACOS / "scripts" / "preinstall"
 POSTINSTALL = MACOS / "scripts" / "postinstall"
 BINARY_PATH = "/usr/local/libexec/edgedisco/edgedisco"
 DATA_ROOT = "/Library/Application Support/EdgeDisco"
+APP_ROOT = Path("Applications/EdgeDisco.app")
+APP_BINARY = APP_ROOT / "Contents/MacOS/EdgeDiscoMenuBar"
+APP_INFO = APP_ROOT / "Contents/Info.plist"
 
 
 def run(*args: str | Path, env: dict[str, str] | None = None, check: bool = True):
@@ -209,6 +213,21 @@ def test_build_rejects_malformed_version_before_creating_output(tmp_path: Path):
     assert not list(tmp_path.glob("*.pkg"))
 
 
+def test_staged_uninstall_removes_application_bundle(tmp_path: Path):
+    root = tmp_path / "staged root"
+    app = root / APP_ROOT
+    binary = root / APP_BINARY
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"menu-bar-fixture")
+    info = root / APP_INFO
+    info.write_bytes(b"plist-fixture")
+
+    result = run(UNINSTALL, env={"EDGEDISCO_STAGED_ROOT": str(root)})
+
+    assert result.returncode == 0, result.stderr
+    assert not app.exists()
+
+
 def test_build_rejects_non_mach_o_binary(tmp_path: Path):
     fake = tmp_path / "edgedisco"
     fake.write_text("#!/bin/sh\nexit 0\n")
@@ -369,6 +388,8 @@ def test_real_flat_package_payload_scripts_modes_and_unsigned_signature(tmp_path
         "usr/local/libexec/edgedisco/edgedisco",
         "Library/LaunchDaemons/com.edgedisco.daemon.plist",
         "Library/LaunchAgents/com.edgedisco.agent.plist",
+        str(APP_BINARY),
+        str(APP_INFO),
     }
     actual_files = {
         str(path.relative_to(payload)) for path in payload.rglob("*") if path.is_file()
@@ -377,11 +398,18 @@ def test_real_flat_package_payload_scripts_modes_and_unsigned_signature(tmp_path
     assert (component / "Scripts/preinstall").is_file()
     assert (component / "Scripts/postinstall").is_file()
     assert stat.S_IMODE((payload / BINARY_PATH.lstrip("/")).stat().st_mode) == 0o755
+    assert stat.S_IMODE((payload / APP_BINARY).stat().st_mode) == 0o755
+    assert stat.S_IMODE((payload / APP_INFO).stat().st_mode) == 0o644
     for executable_parent in (
         payload / "usr",
         payload / "usr/local",
         payload / "usr/local/libexec",
         payload / "usr/local/libexec/edgedisco",
+        payload / "Applications",
+        payload / APP_ROOT,
+        payload / APP_ROOT / "Contents",
+        payload / APP_ROOT / "Contents/MacOS",
+        payload / APP_ROOT / "Contents/Resources",
     ):
         assert stat.S_IMODE(executable_parent.stat().st_mode) == 0o755
     assert (
@@ -404,6 +432,14 @@ def test_real_flat_package_payload_scripts_modes_and_unsigned_signature(tmp_path
     assert stat.S_IMODE((support / "logs").stat().st_mode) == 0o750
     assert stat.S_IMODE((support / "data").stat().st_mode) == 0o700
     assert "Mach-O" in run("file", payload / BINARY_PATH.lstrip("/")).stdout
+    assert "Mach-O" in run("file", payload / APP_BINARY).stdout
+    assert "OK" in run("plutil", "-lint", payload / APP_INFO).stdout
+    app_info = load_plist(payload / APP_INFO)
+    assert app_info["CFBundleExecutable"] == "EdgeDiscoMenuBar"
+    assert app_info["CFBundleIdentifier"] == "com.edgedisco.menubar"
+    assert app_info["CFBundleVersion"] == "0.1.0"
+    assert app_info["CFBundleShortVersionString"] == "0.1.0"
+    assert app_info["LSUIElement"] is True
 
     listed = run("pkgutil", "--payload-files", package).stdout.splitlines()
     for required in expected_files:
