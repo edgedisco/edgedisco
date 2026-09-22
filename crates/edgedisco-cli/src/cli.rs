@@ -1,5 +1,11 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum IpcModeArg {
+    User,
+    System,
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -91,4 +97,24 @@ pub struct DaemonArgs {
     /// Maximum outbox records per OTLP request
     #[arg(long, default_value_t = 100)]
     pub otlp_batch_size: usize,
+
+    /// Unix-domain socket path for local IPC (defaults by IPC mode)
+    #[arg(long)]
+    pub ipc_socket: Option<PathBuf>,
+
+    /// Permission and peer-authorization policy for the local IPC socket
+    #[arg(long, value_enum, default_value_t = IpcModeArg::User)]
+    pub ipc_mode: IpcModeArg,
+
+    /// Numeric peer UID allowed in system IPC mode (repeatable)
+    #[arg(long)]
+    pub ipc_allowed_uid: Vec<u32>,
+
+    /// Numeric owner UID applied to a system-mode socket by installation configuration
+    #[arg(long, requires = "ipc_group_gid")]
+    pub ipc_owner_uid: Option<u32>,
+
+    /// Numeric group GID applied to a system-mode socket by installation configuration
+    #[arg(long, requires = "ipc_owner_uid")]
+    pub ipc_group_gid: Option<u32>,
 }

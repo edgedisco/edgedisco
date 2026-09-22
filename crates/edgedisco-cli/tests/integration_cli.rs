@@ -51,6 +51,18 @@ fn test_parse_daemon_command() {
         "https://telemetry.example/v1/logs",
         "--otlp-batch-size",
         "25",
+        "--ipc-socket",
+        "/tmp/edgedisco.sock",
+        "--ipc-mode",
+        "system",
+        "--ipc-allowed-uid",
+        "501",
+        "--ipc-allowed-uid",
+        "502",
+        "--ipc-owner-uid",
+        "0",
+        "--ipc-group-gid",
+        "80",
     ])
     .expect("parse daemon");
     match cli.command {
@@ -63,6 +75,11 @@ fn test_parse_daemon_command() {
                 Some("https://telemetry.example/v1/logs")
             );
             assert_eq!(args.otlp_batch_size, 25);
+            assert_eq!(args.ipc_socket, Some(PathBuf::from("/tmp/edgedisco.sock")));
+            assert_eq!(args.ipc_mode, edgedisco_cli::cli::IpcModeArg::System);
+            assert_eq!(args.ipc_allowed_uid, vec![501, 502]);
+            assert_eq!(args.ipc_owner_uid, Some(0));
+            assert_eq!(args.ipc_group_gid, Some(80));
         }
         _ => panic!("expected Daemon command"),
     }

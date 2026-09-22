@@ -51,9 +51,10 @@ edgedisco/
 │       ├── Cargo.toml
 │       └── src/
 │           ├── main.rs
-│           ├── commands/          # Subcommand handlers (scan, status, start, stop, restart)
-│           ├── daemon.rs          # Background collector loop & scheduler
-│           └── service/           # OS service manager (launchctl, systemctl, win service)
+│           ├── ipc.rs               # Restricted NDJSON-over-Unix-socket local IPC
+│           ├── commands/            # Subcommand handlers (scan, status, start, stop, restart)
+│           ├── daemon.rs            # Background collector loop & scheduler
+│           └── service/             # OS service manager (launchctl, systemctl, win service)
 ```
 
 ---
@@ -114,9 +115,12 @@ edgedisco start [--root]
 edgedisco stop [--root]
 edgedisco restart [--root]
 
-# Background collector daemon
+# Background collector daemon with restricted local Unix-socket IPC
 edgedisco daemon [--interval <seconds>] [--config <path>]
+edgedisco daemon [--ipc-socket <path>] [--ipc-mode user|system]
 ```
+
+The daemon IPC contract, filesystem and peer-credential policy, framing limits, lifecycle, and privacy boundary are specified in [`local-ipc.md`](local-ipc.md). The endpoint opens no TCP listener.
 
 ---
 
