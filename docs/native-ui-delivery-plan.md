@@ -120,8 +120,10 @@ settings still require administrator-managed configuration and restart.
   are not exported.
 - Added conservative direct and JAR-backed `plugin.xml` JetBrains plugin discovery
   for Junie, Continue, and Kilo Code. Archive and extracted XML reads are bounded.
-- Remaining: executable fingerprint evidence,
-  interactive window QA and login/upgrade validation, explicit OTLP connection
+- Added bounded, no-follow SHA-256 evidence for macOS bundle executables named
+  in `Info.plist`. Unreadable, symlinked, and oversized executables leave the
+  app visible without binary evidence.
+- Remaining: interactive window QA and login/upgrade validation, explicit OTLP connection
   testing, and export diagnostics. No installed services have been changed.
 - The native Settings window now reads either daemon's effective configuration.
   My Session settings are stored at `~/.edgedisco/config/daemon.json`, with

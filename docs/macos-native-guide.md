@@ -80,7 +80,8 @@ versions, and do not run extension code. MCP declarations in Claude Desktop,
 Cursor, and VS Code configuration are also inventoried without exporting URLs,
 arguments, environment variables, or raw paths. Known JetBrains plugins with
 direct or JAR-backed `META-INF/plugin.xml` manifests are included through bounded
-metadata reads; plugin code is not executed.
+metadata reads; plugin code is not executed. Recognized macOS app bundles also
+include a bounded hash of their declared executable when it can be read safely.
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 

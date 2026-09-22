@@ -52,7 +52,20 @@ pub fn scan_installed_apps_in(roots: &[PathBuf]) -> Vec<Asset> {
             asset.path_hash = Some(path_hash);
             #[cfg(target_os = "macos")]
             {
-                asset.version = read_bundle_version(root, &path);
+                let (version, digest) = read_bundle_details(root, &path);
+                asset.version = version;
+                if let Some(digest) = digest {
+                    asset.binary_fingerprint_status = Some(
+                        if edgedisco_core::catalog::known_binary(name, &digest).is_some() {
+                            "matched"
+                        } else {
+                            "unlisted"
+                        }
+                        .into(),
+                    );
+                    asset.binary_sha256 = Some(digest);
+                    asset.fingerprint_library_version = Some(catalog().updated.clone());
+                }
             }
             asset.metadata.insert(
                 "package".into(),
@@ -78,7 +91,7 @@ fn is_real_directory(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn read_bundle_version(root: &Path, bundle: &Path) -> Option<String> {
+fn read_bundle_details(root: &Path, bundle: &Path) -> (Option<String>, Option<String>) {
     use crate::safe_metadata::{open_child, open_dir, read_regular};
     use std::ffi::OsStr;
     use std::io::Write;
@@ -88,32 +101,70 @@ fn read_bundle_version(root: &Path, bundle: &Path) -> Option<String> {
 
     // Open each path component relative to its already-open parent. A symlink
     // replacement at any component cannot redirect the read outside the root.
-    let root_dir = open_dir(root).ok()?;
-    let bundle_dir = open_child(&root_dir, bundle.file_name()?, libc::O_DIRECTORY)?;
-    let contents_dir = open_child(&bundle_dir, OsStr::new("Contents"), libc::O_DIRECTORY)?;
-    let plist = read_regular(&contents_dir, OsStr::new("Info.plist"), MAX_PLIST_BYTES)?;
-
-    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
-        let mut child = Command::new("/usr/bin/plutil")
-            .args([
-                "-extract", key, "raw", "-expect", "string", "-n", "-o", "-", "-",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        child.stdin.take()?.write_all(&plist).ok()?;
-        let output = child.wait_with_output().ok()?;
-        if output.status.success() {
-            let version = std::str::from_utf8(&output.stdout).ok()?.trim();
-            if !version.is_empty() && version.len() <= 128 && !version.chars().any(char::is_control)
-            {
-                return Some(version.to_owned());
+    let read = || -> Option<(Option<String>, Option<String>)> {
+        let root_dir = open_dir(root).ok()?;
+        let bundle_dir = open_child(&root_dir, bundle.file_name()?, libc::O_DIRECTORY)?;
+        let contents_dir = open_child(&bundle_dir, OsStr::new("Contents"), libc::O_DIRECTORY)?;
+        let plist = read_regular(&contents_dir, OsStr::new("Info.plist"), MAX_PLIST_BYTES)?;
+        let extract = |key: &str| -> Option<String> {
+            let mut child = Command::new("/usr/bin/plutil")
+                .args([
+                    "-extract", key, "raw", "-expect", "string", "-n", "-o", "-", "-",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()?;
+            child.stdin.take()?.write_all(&plist).ok()?;
+            let output = child.wait_with_output().ok()?;
+            if output.status.success() {
+                let value = std::str::from_utf8(&output.stdout).ok()?.trim();
+                if !value.is_empty() && !value.chars().any(char::is_control) {
+                    return Some(value.to_owned());
+                }
             }
-        }
+            None
+        };
+        let version = extract("CFBundleShortVersionString")
+            .filter(|v| v.len() <= 128)
+            .or_else(|| extract("CFBundleVersion").filter(|v| v.len() <= 128));
+        let executable = extract("CFBundleExecutable")
+            .filter(|v| v.len() <= 255 && !v.contains(['/', '\\']) && v != "." && v != "..");
+        let digest = executable.and_then(|name| {
+            let macos_dir = open_child(&contents_dir, OsStr::new("MacOS"), libc::O_DIRECTORY)?;
+            let file = open_child(&macos_dir, OsStr::new(&name), libc::O_NONBLOCK)?;
+            hash_executable(file)
+        });
+        Some((version, digest))
+    };
+    read().unwrap_or((None, None))
+}
+
+#[cfg(target_os = "macos")]
+fn hash_executable(mut file: std::fs::File) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    const MAX_BYTES: u64 = 256 * 1024 * 1024;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return None;
     }
-    None
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = file.read(&mut buffer).ok()?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > MAX_BYTES {
+            return None;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    (total == metadata.len()).then(|| format!("{:x}", hasher.finalize()))
 }
 
 fn classify_bundle_name(stem: &str) -> Option<(&'static str, &'static str)> {

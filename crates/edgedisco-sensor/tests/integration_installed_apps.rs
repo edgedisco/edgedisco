@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use edgedisco_core::redaction::{sha256_digest, validate_asset};
 use edgedisco_sensor::installed_apps::scan_installed_apps_in;
 use std::path::Path;
 use tempfile::tempdir;
@@ -151,4 +153,42 @@ fn rejects_symlinked_and_oversized_bundle_metadata_without_losing_detection() {
     let assets = scan_installed_apps_in(&[apps]);
     assert_eq!(assets.len(), 3);
     assert!(assets.iter().all(|asset| asset.version.is_none()));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn bundle_executable_evidence_is_bounded_and_never_follows_links() {
+    use std::os::unix::fs::symlink;
+    let temp = tempdir().unwrap();
+    let apps = temp.path().join("Applications");
+    std::fs::create_dir(&apps).unwrap();
+    for (app, executable) in [("Cursor", "Cursor"), ("Kiro", "Kiro"), ("Goose", "Goose")] {
+        let contents = apps.join(format!("{app}.app/Contents"));
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::write(contents.join("Info.plist"), format!("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>{executable}</string></dict></plist>")).unwrap();
+    }
+    let cursor = apps.join("Cursor.app/Contents/MacOS/Cursor");
+    std::fs::write(&cursor, b"safe-executable").unwrap();
+    let private = temp.path().join("private-bin");
+    std::fs::write(&private, b"private-executable").unwrap();
+    symlink(&private, apps.join("Kiro.app/Contents/MacOS/Kiro")).unwrap();
+    let huge = std::fs::File::create(apps.join("Goose.app/Contents/MacOS/Goose")).unwrap();
+    huge.set_len(256 * 1024 * 1024 + 1).unwrap();
+
+    let assets = scan_installed_apps_in(&[apps]);
+    assert_eq!(assets.len(), 3);
+    let cursor_asset = assets.iter().find(|asset| asset.name == "Cursor").unwrap();
+    assert_eq!(
+        cursor_asset.binary_sha256.as_deref(),
+        Some(sha256_digest(b"safe-executable").as_str())
+    );
+    assert_eq!(
+        cursor_asset.binary_fingerprint_status.as_deref(),
+        Some("unlisted")
+    );
+    assert!(assets.iter().all(|asset| validate_asset(asset, 2).is_ok()));
+    assert!(assets
+        .iter()
+        .filter(|asset| asset.name != "Cursor")
+        .all(|asset| asset.binary_sha256.is_none()));
 }
