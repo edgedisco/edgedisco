@@ -370,6 +370,10 @@ def test_real_flat_package_payload_scripts_modes_and_unsigned_signature(tmp_path
                 REPO / "target/release/edgedisco",
                 "--output-dir",
                 tmp_path,
+                env={
+                    "EDGEDISCO_RELEASE_TAG": "v0.1.0-test",
+                    "EDGEDISCO_BUILD_NUMBER": "314",
+                },
             )
             .stdout.strip()
             .splitlines()[-1]
@@ -442,6 +446,8 @@ def test_real_flat_package_payload_scripts_modes_and_unsigned_signature(tmp_path
     assert app_info["CFBundleIdentifier"] == "com.edgedisco.menubar"
     assert app_info["CFBundleVersion"] == "0.1.0"
     assert app_info["CFBundleShortVersionString"] == "0.1.0"
+    assert app_info["EdgeDiscoReleaseTag"] == "v0.1.0-test"
+    assert app_info["EdgeDiscoBuildNumber"] == "314"
     assert app_info["LSUIElement"] is True
 
     listed = run("pkgutil", "--payload-files", package).stdout.splitlines()

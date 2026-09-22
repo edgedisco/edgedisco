@@ -10,6 +10,8 @@ usage() {
 [ "$#" -ge 1 ] || usage
 VERSION=$1
 shift
+RELEASE_TAG=${EDGEDISCO_RELEASE_TAG:-local}
+BUILD_NUMBER=${EDGEDISCO_BUILD_NUMBER:-local}
 case "$VERSION" in
     ''|*[!0-9A-Za-z.+-]*|.*|-*|*.) printf 'invalid package version: %s\n' "$VERSION" >&2; exit 64 ;;
 esac
@@ -84,6 +86,8 @@ plutil -insert CFBundleName -string EdgeDisco "$APP_INFO"
 plutil -insert CFBundlePackageType -string APPL "$APP_INFO"
 plutil -insert CFBundleShortVersionString -string "$VERSION" "$APP_INFO"
 plutil -insert CFBundleVersion -string "$VERSION" "$APP_INFO"
+plutil -insert EdgeDiscoReleaseTag -string "$RELEASE_TAG" "$APP_INFO"
+plutil -insert EdgeDiscoBuildNumber -string "$BUILD_NUMBER" "$APP_INFO"
 plutil -insert LSMinimumSystemVersion -string 13.0 "$APP_INFO"
 plutil -insert LSUIElement -bool true "$APP_INFO"
 plutil -lint "$APP_INFO" >/dev/null

@@ -21,17 +21,26 @@ jobs:
 
       - name: Resolve release version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          PUBLISHED_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            RAW_VER="${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            RAW_VER="$INPUT_VERSION"
+            TAG="v${RAW_VER#v}"
           else
-            RAW_VER="${{ github.ref_name }}"
+            RAW_VER="$PUBLISHED_TAG"
+            TAG="$PUBLISHED_TAG"
           fi
           VER="${RAW_VER#v}"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "Building version: $VER"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VER (tag: $TAG)"
 
       - name: Build macOS unsigned flat package
+        env:
+          EDGEDISCO_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          EDGEDISCO_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           make macos-pkg VERSION="${{ steps.version.outputs.version }}"
 

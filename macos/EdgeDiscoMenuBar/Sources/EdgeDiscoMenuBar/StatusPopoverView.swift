@@ -11,6 +11,15 @@ struct StatusPopoverView: View {
     let quitAction: () -> Void
     @State private var isShowingDetections = false
 
+    private var buildMetadata: [(String, String)] {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return [
+            ("Version", info["CFBundleShortVersionString"] as? String ?? "Development"),
+            ("Build", info["EdgeDiscoBuildNumber"] as? String ?? "local"),
+            ("Tag", info["EdgeDiscoReleaseTag"] as? String ?? "local"),
+        ]
+    }
+
     private var formattedLastScan: String {
         guard let iso = viewModel.lastScanTimestamp, !iso.isEmpty else { return "Never" }
         let formatter = ISO8601DateFormatter()
@@ -69,6 +78,19 @@ struct StatusPopoverView: View {
                 }
             }
             .padding(.vertical, 2)
+
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+                ForEach(buildMetadata, id: \.0) { label, value in
+                    GridRow {
+                        Text(label).foregroundStyle(.secondary)
+                        Text(value)
+                            .textSelection(.enabled)
+                            .accessibilityLabel("\(label) \(value)")
+                    }
+                }
+            }
 
             HStack(spacing: 8) {
                 Button {
