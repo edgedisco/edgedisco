@@ -21,7 +21,7 @@ The flat package identifier is `com.edgedisco.pkg`. `pkgbuild --ownership recomm
 
 The LaunchDaemon label is `com.edgedisco.daemon`. It runs the native binary in system IPC mode, uses `/Library/Application Support/EdgeDisco/data/inventory.db`, and binds `/var/run/edgedisco.sock`. The current package authorizes only UID 0 on that socket. Expanding access requires an explicit installation policy in a later release; the per-user collector is not granted system database or socket access implicitly.
 
-The LaunchAgent label is `com.edgedisco.agent`. It runs `edgedisco scan` every 60 seconds in the login session. Its working directory is `/`, which is traversable by ordinary users and does not grant access to enterprise state. With no `--db` or IPC arguments, the CLI resolves the user's own `~/.edgedisco/data/inventory.db`; it cannot claim the enterprise database or system socket. It is a finite collector job, so `StartInterval` rather than `KeepAlive` controls its lifecycle.
+The LaunchAgent label is `com.edgedisco.agent`. It runs a persistent `edgedisco daemon --interval 60` in the login session, using `KeepAlive` and a 10-second restart throttle. Its working directory is `/`. Default user-mode paths are `~/.edgedisco/data/inventory.db` and `~/.edgedisco/edgedisco.sock`; it does not acquire system database or socket access. The menu-bar app selects this daemon for **My Session** and the system daemon for **This Mac**, without silently falling back between them. Scan Now targets the selected source.
 
 ## Build an unsigned package
 

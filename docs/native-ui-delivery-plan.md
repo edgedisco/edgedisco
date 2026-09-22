@@ -81,7 +81,18 @@ IPC. Configuration currently supports JSON schema 1 and requires service restart
   native non-persisting scan both reported GitHub Copilot, Google Antigravity CLI,
   Hermes Agent, and OpenCode. This establishes the first slice on this machine,
   not full static-inventory parity or installed-app UI delivery.
-- Milestones 2–5 and the remaining static collectors are pending. The first slice
-  alone does not fix the menu-bar app's system/user visibility split.
+- Continued with milestone 2: the packaged LaunchAgent now runs a persistent
+  user-mode daemon. The UI explicitly selects My Session or This Mac, targets
+  that source for scans, and discards late responses after switching scopes.
+  This ships separate source views; a combined deduplicated product summary is
+  still pending. The user service change takes effect on package installation.
+- Implemented the initial milestone 3 inventory window: reusable and resizable,
+  with search, state filters, versions, evidence types, and last-seen timestamps.
+  Detection refresh failures retain an explicit stale-data warning. The popover
+  labels observation counts as Last scan findings.
+- Remaining: static app/extension/MCP collectors, combined product counts,
+  interactive window QA and login/upgrade validation, Settings with authorized
+  live reload, and export diagnostics. No installed services have been changed.
+- Continuation checks: 10 menu-bar tests, 16 IPC tests, and 18 package tests passed.
 - Validation: full Rust workspace suite passed; Clippy with warnings denied,
   formatting, and diff checks passed. No installed services were changed.

@@ -11,6 +11,7 @@ final class StatusItemManager: NSObject {
     private let popover: NSPopover
     private var pollTimer: Timer?
     private var stateObservation: AnyCancellable?
+    private var inventoryWindow: NSWindow?
 
     init(viewModel: StatusViewModel? = nil) {
         let viewModel = viewModel ?? StatusViewModel()
@@ -23,7 +24,8 @@ final class StatusItemManager: NSObject {
         popover.contentViewController = NSHostingController(
             rootView: StatusPopoverView(
                 viewModel: viewModel,
-                quitAction: { NSApplication.shared.terminate(nil) }
+                quitAction: { NSApplication.shared.terminate(nil) },
+                openInventory: { [weak self] in self?.showInventory() }
             )
         )
 
@@ -52,6 +54,25 @@ final class StatusItemManager: NSObject {
                 self?.refreshStatus()
             }
         }
+    }
+
+    private func showInventory() {
+        popover.performClose(nil)
+        if inventoryWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered, defer: false
+            )
+            window.title = "EdgeDisco Inventory"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: DetectionsListView(viewModel: viewModel))
+            window.center()
+            inventoryWindow = window
+        }
+        inventoryWindow?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        Task { await viewModel.loadDetections() }
     }
 
     @objc
