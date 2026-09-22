@@ -268,6 +268,17 @@ The managed processes are:
 Inspect or restart the core services with:
 
 ```bash
+edgedisco status
+edgedisco stop
+edgedisco start
+edgedisco restart
+
+# Or target individual services:
+edgedisco stop agent
+edgedisco start agent
+edgedisco restart server
+
+# Native systemd commands remain supported:
 systemctl --user status com.edgedisco.server.service com.edgedisco.agent.service --no-pager
 systemctl --user restart com.edgedisco.server.service com.edgedisco.agent.service
 journalctl --user -u com.edgedisco.server.service -u com.edgedisco.agent.service -f

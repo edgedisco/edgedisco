@@ -251,6 +251,20 @@ The managed processes are:
 | OTLP exporter | `com.edgedisco.otlp-export` | Only when OTLP delivery is enabled |
 | MCP server | None; foreground command | No |
 
+Manage background services with:
+
+```bash
+edgedisco status
+edgedisco stop
+edgedisco start
+edgedisco restart
+
+# Or target individual services:
+edgedisco stop agent
+edgedisco start agent
+edgedisco restart server
+```
+
 Important files are:
 
 | Location | Purpose |

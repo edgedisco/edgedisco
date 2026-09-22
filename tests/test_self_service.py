@@ -11,17 +11,28 @@ from unittest.mock import patch
 
 from ai_asset_inventory.self_service import (
     AGENT_LABEL,
+    EXPORTER_LABEL,
     LAUNCHER_MARKER,
     PATH_MARKER_BEGIN,
     PATH_MARKER_END,
     SERVER_LABEL,
+    Layout,
     default_layout,
     ensure_credentials,
     install_cli_launcher,
     open_dashboard,
     ensure_local_server,
+    restart_linux,
+    restart_macos,
+    restart_services,
     setup_linux,
     setup_macos,
+    start_linux,
+    start_macos,
+    start_services,
+    stop_linux,
+    stop_macos,
+    stop_services,
     _restart_service,
     _verify_browser_bootstrap,
     _health,
@@ -377,6 +388,175 @@ class CliLauncherTests(unittest.TestCase):
             self.assertIn(str(layout.bin), (home / ".zprofile").read_text())
             uninstall_cli_launcher(layout, home)
             self.assertEqual(public.read_text(), "#!/bin/sh\necho not-ours\n")
+
+
+class ServiceLifecycleTests(unittest.TestCase):
+    def _create_macos_plists(self, home: Path, labels=(SERVER_LABEL, AGENT_LABEL)) -> Layout:
+        layout = default_layout(home / ".edgedisco", home)
+        layout.root.mkdir(parents=True, exist_ok=True)
+        layout.launch_agents.mkdir(parents=True, exist_ok=True)
+        for label in labels:
+            (layout.launch_agents / f"{label}.plist").write_bytes(b"plist-content")
+        return layout
+
+    def _create_linux_units(self, home: Path, labels=(SERVER_LABEL, AGENT_LABEL)) -> Layout:
+        layout = default_layout(home / ".edgedisco", home)
+        layout.root.mkdir(parents=True, exist_ok=True)
+        layout.systemd_user.mkdir(parents=True, exist_ok=True)
+        for label in labels:
+            (layout.systemd_user / f"{label}.service").write_text("unit-content")
+        return layout
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._wait_for_server")
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_macos_start_all_services_in_forward_order(self, launchctl, wait_server, _system):
+        def _fake_launchctl(action, *args, **kwargs):
+            if action == "print":
+                return subprocess.CompletedProcess(["launchctl"], returncode=1, stderr="Not found")
+            return subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="")
+
+        launchctl.side_effect = _fake_launchctl
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            result = start_macos(root=layout.root, home=home)
+            self.assertEqual(result, {SERVER_LABEL: "started", AGENT_LABEL: "started"})
+            bootstraps = [call.args[1] for call in launchctl.call_args_list if call.args[0] == "bootstrap"]
+            self.assertEqual(bootstraps, [f"gui/{os.getuid()}", f"gui/{os.getuid()}"])
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._health", return_value={"status": "ok"})
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_macos_start_already_running(self, launchctl, _health, _system):
+        launchctl.return_value = subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="state = running")
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            result = start_macos(root=layout.root, home=home)
+            self.assertEqual(result, {SERVER_LABEL: "already running", AGENT_LABEL: "already running"})
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._health", return_value=None)
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_macos_stop_all_services_in_reverse_order(self, launchctl, _health, _system):
+        launchctl.return_value = subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="state = running")
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            result = stop_macos(root=layout.root, home=home)
+            self.assertEqual(result, {AGENT_LABEL: "stopped", SERVER_LABEL: "stopped"})
+            bootouts = [call.args[1] for call in launchctl.call_args_list if call.args[0] == "bootout"]
+            domain = f"gui/{os.getuid()}"
+            self.assertEqual(bootouts, [f"{domain}/{AGENT_LABEL}", f"{domain}/{SERVER_LABEL}"])
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_macos_stop_already_stopped(self, launchctl, _system):
+        launchctl.return_value = subprocess.CompletedProcess(["launchctl"], returncode=1, stderr="Not found")
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            result = stop_macos(root=layout.root, home=home)
+            self.assertEqual(result, {AGENT_LABEL: "already stopped", SERVER_LABEL: "already stopped"})
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service.stop_macos")
+    @patch("ai_asset_inventory.self_service.start_macos")
+    def test_macos_restart_services(self, start_mac, stop_mac, _system):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            result = restart_macos(root=layout.root, home=home)
+            self.assertEqual(result, {SERVER_LABEL: "restarted", AGENT_LABEL: "restarted"})
+            stop_mac.assert_called_once()
+            start_mac.assert_called_once()
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    @patch("ai_asset_inventory.self_service._health", return_value=None)
+    @patch("ai_asset_inventory.self_service._launchctl")
+    def test_target_specific_service_by_alias(self, launchctl, _health, _system):
+        launchctl.return_value = subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="state = running")
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_macos_plists(home)
+            stop_res = stop_macos(root=layout.root, services=["agent"], home=home)
+            self.assertEqual(stop_res, {AGENT_LABEL: "stopped"})
+
+            def _fake_launchctl(action, *args, **kwargs):
+                if action == "print":
+                    return subprocess.CompletedProcess(["launchctl"], returncode=1, stderr="Not found")
+                return subprocess.CompletedProcess(["launchctl"], returncode=0, stdout="")
+
+            launchctl.side_effect = _fake_launchctl
+            start_res = start_macos(root=layout.root, services=["server"], home=home)
+            self.assertEqual(start_res, {SERVER_LABEL: "started"})
+
+    def test_service_validation_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = default_layout(home / ".edgedisco", home)
+            with self.assertRaisesRegex(RuntimeError, "No EdgeDisco services found"):
+                start_macos(root=layout.root, home=home)
+
+            layout.launch_agents.mkdir(parents=True, exist_ok=True)
+            (layout.launch_agents / f"{SERVER_LABEL}.plist").write_bytes(b"data")
+            with self.assertRaisesRegex(RuntimeError, "Unknown service"):
+                start_macos(root=layout.root, services=["nonexistent"], home=home)
+
+            with self.assertRaisesRegex(RuntimeError, "Service com.edgedisco.otlp-export is not installed"):
+                start_macos(root=layout.root, services=["otlp-export"], home=home)
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Linux")
+    @patch("ai_asset_inventory.self_service.require_systemd_user")
+    @patch("ai_asset_inventory.self_service._systemctl")
+    def test_linux_start_stop_restart(self, systemctl, require_sd, _system):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            layout = self._create_linux_units(home)
+            systemctl.return_value = subprocess.CompletedProcess(["systemctl"], returncode=0, stdout="inactive")
+
+            start_res = start_linux(root=layout.root, home=home)
+            self.assertEqual(start_res, {SERVER_LABEL: "started", AGENT_LABEL: "started"})
+
+            systemctl.return_value = subprocess.CompletedProcess(["systemctl"], returncode=0, stdout="active")
+            stop_res = stop_linux(root=layout.root, home=home)
+            self.assertEqual(stop_res, {AGENT_LABEL: "stopped", SERVER_LABEL: "stopped"})
+
+            restart_res = restart_linux(root=layout.root, home=home)
+            self.assertEqual(restart_res, {SERVER_LABEL: "restarted", AGENT_LABEL: "restarted"})
+
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Windows")
+    def test_unsupported_os_raises(self, _system):
+        with self.assertRaisesRegex(RuntimeError, "supports macOS and systemd-based Linux"):
+            start_services()
+        with self.assertRaisesRegex(RuntimeError, "supports macOS and systemd-based Linux"):
+            stop_services()
+        with self.assertRaisesRegex(RuntimeError, "supports macOS and systemd-based Linux"):
+            restart_services()
+
+    @patch("ai_asset_inventory.cli.start_services", return_value={SERVER_LABEL: "started"})
+    @patch("ai_asset_inventory.cli.stop_services", return_value={SERVER_LABEL: "stopped"})
+    @patch("ai_asset_inventory.cli.restart_services", return_value={SERVER_LABEL: "restarted"})
+    def test_cli_lifecycle_commands(self, restart_mock, stop_mock, start_mock):
+        from ai_asset_inventory.cli import main
+        out = io.StringIO()
+        with patch("sys.argv", ["edgedisco", "start", "server"]), redirect_stdout(out):
+            main()
+        start_mock.assert_called_once_with(root=None, services=["server"])
+        self.assertIn(f"{SERVER_LABEL}: started", out.getvalue())
+
+        out = io.StringIO()
+        with patch("sys.argv", ["edgedisco", "stop"]), redirect_stdout(out):
+            main()
+        stop_mock.assert_called_once_with(root=None, services=None)
+        self.assertIn(f"{SERVER_LABEL}: stopped", out.getvalue())
+
+        out = io.StringIO()
+        with patch("sys.argv", ["edgedisco", "restart", "agent"]), redirect_stdout(out):
+            main()
+        restart_mock.assert_called_once_with(root=None, services=["agent"])
+        self.assertIn(f"{SERVER_LABEL}: restarted", out.getvalue())
 
 
 if __name__ == "__main__":

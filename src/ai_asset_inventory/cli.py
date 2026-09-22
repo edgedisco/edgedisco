@@ -11,7 +11,18 @@ from .server import serve
 from .runtime import MAX_HOOK_INPUT_BYTES, RuntimeClient
 from .adapters import install_adapters
 from .demo import run_demo
-from .self_service import open_dashboard, setup_self_service, status as self_service_status, uninstall_self_service
+from .self_service import (
+    AGENT_LABEL,
+    EXPORTER_LABEL,
+    SERVER_LABEL,
+    open_dashboard,
+    restart_services,
+    setup_self_service,
+    start_services,
+    status as self_service_status,
+    stop_services,
+    uninstall_self_service,
+)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -63,6 +74,15 @@ def parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--root", type=Path)
     uninstall.add_argument("--purge", action="store_true", help="also delete local data")
     uninstall.add_argument("--yes", action="store_true", help="confirm data deletion")
+    for action_name in ("start", "stop", "restart"):
+        action_parser = sub.add_parser(action_name, help=f"{action_name} background services")
+        action_parser.add_argument("--root", type=Path)
+        action_parser.add_argument(
+            "services",
+            nargs="*",
+            metavar="SERVICE",
+            help="optional service name(s): server, agent, otlp-export (default: all installed services)",
+        )
     mcp = sub.add_parser("mcp", help="run the read-only MCP compliance server")
     mcp.add_argument("--db", type=Path, default=Path.home() / ".edgedisco/data/inventory.db")
     mcp.add_argument("--host", default="127.0.0.1")
@@ -168,6 +188,15 @@ def main() -> None:
             print("Local configuration, credentials, logs, and evidence removed")
         else:
             print(f"Local data retained at {result['root']}")
+        return
+    if args.command in ("start", "stop", "restart"):
+        fn = {"start": start_services, "stop": stop_services, "restart": restart_services}[args.command]
+        try:
+            result = fn(root=args.root, services=args.services or None)
+            for service, state in result.items():
+                print(f"{service}: {state}")
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
         return
     if args.command == "mcp":
         from .mcp_server import serve as serve_mcp

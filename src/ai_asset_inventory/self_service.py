@@ -29,6 +29,16 @@ from .path_policy import allowed_path
 SERVER_LABEL = "com.edgedisco.server"
 AGENT_LABEL = "com.edgedisco.agent"
 EXPORTER_LABEL = "com.edgedisco.otlp-export"
+SERVICE_LABELS = (SERVER_LABEL, AGENT_LABEL, EXPORTER_LABEL)
+SERVICE_NAME_MAP = {
+    "server": SERVER_LABEL,
+    "agent": AGENT_LABEL,
+    "otlp-export": EXPORTER_LABEL,
+    "exporter": EXPORTER_LABEL,
+    SERVER_LABEL: SERVER_LABEL,
+    AGENT_LABEL: AGENT_LABEL,
+    EXPORTER_LABEL: EXPORTER_LABEL,
+}
 CLI_NAME = "edgedisco"
 PATH_MARKER_BEGIN = "# >>> edgedisco PATH >>>"
 PATH_MARKER_END = "# <<< edgedisco PATH <<<"
@@ -417,7 +427,10 @@ def _restart_systemd_service(name: str, *, wait_for_port: int | None = None) -> 
 
 
 def _launchctl(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["launchctl", *arguments], capture_output=True, text=True, check=check)
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+        environment.pop(key, None)
+    return subprocess.run(["launchctl", *arguments], env=environment, capture_output=True, text=True, check=check)
 
 
 def _restart_service(label: str, plist: Path, *, wait_for_port: int | None = None) -> None:
@@ -448,7 +461,7 @@ def _health(port: int, admin_token: str | None = None) -> dict[str, Any] | None:
         return None
 
 
-def _wait_for_server(port: int, admin_token: str, timeout: int = 20) -> None:
+def _wait_for_server(port: int, admin_token: str | None = None, timeout: int = 20) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _health(port, admin_token) is not None:
@@ -785,6 +798,236 @@ def uninstall_self_service(**kwargs: Any) -> dict[str, Any]:
     if platform.system() == "Linux":
         return uninstall_linux(**kwargs)
     raise RuntimeError("self-service uninstall supports macOS and systemd-based Linux")
+
+
+def _resolve_service_labels(
+    layout: Layout,
+    requested: list[str] | None,
+    *,
+    is_macos: bool,
+) -> list[str]:
+    def _service_file(lbl: str) -> Path:
+        return (layout.launch_agents / f"{lbl}.plist") if is_macos else (layout.systemd_user / f"{lbl}.service")
+
+    if requested:
+        resolved: list[str] = []
+        for item in requested:
+            lbl = SERVICE_NAME_MAP.get(item.lower() if isinstance(item, str) else item)
+            if not lbl:
+                raise RuntimeError(
+                    f"Unknown service: {item}; choose from server, agent, otlp-export"
+                )
+            file_path = _service_file(lbl)
+            if not file_path.exists():
+                raise RuntimeError(f"Service {lbl} is not installed ({file_path} not found)")
+            if lbl not in resolved:
+                resolved.append(lbl)
+        return resolved
+
+    installed = [lbl for lbl in SERVICE_LABELS if _service_file(lbl).exists()]
+    if not installed:
+        location = layout.launch_agents if is_macos else layout.systemd_user
+        raise RuntimeError(f"No EdgeDisco services found in {location}; run 'edgedisco setup' first")
+    return installed
+
+
+def start_macos(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Darwin":
+        raise RuntimeError("macOS service start requires Darwin")
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=True)
+    targets.sort(key=lambda s: SERVICE_LABELS.index(s))
+    domain = f"gui/{os.getuid()}"
+    results: dict[str, str] = {}
+    values = _parse_env(layout.env) if layout.env.exists() else {}
+    port = int(values.get("EDGEDISCO_PORT", "8080"))
+
+    for label in targets:
+        plist = layout.launch_agents / f"{label}.plist"
+        target = f"{domain}/{label}"
+        state = _launchctl("print", target, check=False)
+        if state.returncode == 0:
+            if label == SERVER_LABEL:
+                if _health(port) is not None:
+                    results[label] = "already running"
+                    continue
+                _launchctl("kickstart", "-k", target, check=False)
+                if values.get("AAI_ADMIN_TOKEN"):
+                    _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
+                results[label] = "started"
+            else:
+                results[label] = "already running"
+        else:
+            res = _launchctl("bootstrap", domain, str(plist), check=False)
+            if res.returncode != 0:
+                raise RuntimeError(f"could not start {label}: {res.stderr.strip() or res.stdout.strip()}")
+            if label == SERVER_LABEL and values.get("AAI_ADMIN_TOKEN"):
+                _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
+            results[label] = "started"
+    return results
+
+
+def stop_macos(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Darwin":
+        raise RuntimeError("macOS service stop requires Darwin")
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=True)
+    targets.sort(key=lambda s: SERVICE_LABELS.index(s), reverse=True)
+    domain = f"gui/{os.getuid()}"
+    results: dict[str, str] = {}
+
+    for label in targets:
+        target = f"{domain}/{label}"
+        state = _launchctl("print", target, check=False)
+        if state.returncode != 0:
+            results[label] = "already stopped"
+            continue
+        _launchctl("bootout", target, check=False)
+        if label == SERVER_LABEL and layout.env.exists():
+            port = int(_parse_env(layout.env).get("EDGEDISCO_PORT", "8080"))
+            deadline = time.monotonic() + 5
+            while _health(port) is not None:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"port {port} is still served after stopping {label}")
+                time.sleep(0.1)
+        results[label] = "stopped"
+    return results
+
+
+def restart_macos(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Darwin":
+        raise RuntimeError("macOS service restart requires Darwin")
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=True)
+    stop_macos(root=root, services=targets, home=home)
+    start_macos(root=root, services=targets, home=home)
+    return {label: "restarted" for label in targets}
+
+
+def start_linux(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Linux":
+        raise RuntimeError("Linux service start requires Linux")
+    require_systemd_user()
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=False)
+    targets.sort(key=lambda s: SERVICE_LABELS.index(s))
+    _systemctl("daemon-reload", check=False)
+    results: dict[str, str] = {}
+    values = _parse_env(layout.env) if layout.env.exists() else {}
+    port = int(values.get("EDGEDISCO_PORT", "8080"))
+
+    for label in targets:
+        unit = f"{label}.service"
+        state = _systemctl("is-active", unit, check=False)
+        if state.stdout.strip() == "active":
+            if label == SERVER_LABEL:
+                if _health(port) is not None:
+                    results[label] = "already running"
+                    continue
+                _systemctl("restart", unit, check=False)
+                if values.get("AAI_ADMIN_TOKEN"):
+                    _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
+                results[label] = "started"
+            else:
+                results[label] = "already running"
+        else:
+            res = _systemctl("start", unit, check=False)
+            if res.returncode != 0:
+                raise RuntimeError(f"could not start {label}: {res.stderr.strip() or res.stdout.strip()}")
+            if label == SERVER_LABEL and values.get("AAI_ADMIN_TOKEN"):
+                _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
+            results[label] = "started"
+    return results
+
+
+def stop_linux(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Linux":
+        raise RuntimeError("Linux service stop requires Linux")
+    require_systemd_user()
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=False)
+    targets.sort(key=lambda s: SERVICE_LABELS.index(s), reverse=True)
+    results: dict[str, str] = {}
+
+    for label in targets:
+        unit = f"{label}.service"
+        state = _systemctl("is-active", unit, check=False)
+        is_active = (state.stdout.strip() == "active")
+        _systemctl("stop", unit, check=False)
+        if label == SERVER_LABEL and layout.env.exists():
+            port = int(_parse_env(layout.env).get("EDGEDISCO_PORT", "8080"))
+            deadline = time.monotonic() + 5
+            while _health(port) is not None:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"port {port} is still served after stopping {label}")
+                time.sleep(0.1)
+        results[label] = "stopped" if is_active else "already stopped"
+    return results
+
+
+def restart_linux(
+    *,
+    root: Path | None = None,
+    services: list[str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
+    if platform.system() != "Linux":
+        raise RuntimeError("Linux service restart requires Linux")
+    require_systemd_user()
+    layout = default_layout(root, home)
+    targets = _resolve_service_labels(layout, services, is_macos=False)
+    stop_linux(root=root, services=targets, home=home)
+    start_linux(root=root, services=targets, home=home)
+    return {label: "restarted" for label in targets}
+
+
+def start_services(**kwargs: Any) -> dict[str, str]:
+    if platform.system() == "Darwin":
+        return start_macos(**kwargs)
+    if platform.system() == "Linux":
+        return start_linux(**kwargs)
+    raise RuntimeError("self-service start supports macOS and systemd-based Linux")
+
+
+def stop_services(**kwargs: Any) -> dict[str, str]:
+    if platform.system() == "Darwin":
+        return stop_macos(**kwargs)
+    if platform.system() == "Linux":
+        return stop_linux(**kwargs)
+    raise RuntimeError("self-service stop supports macOS and systemd-based Linux")
+
+
+def restart_services(**kwargs: Any) -> dict[str, str]:
+    if platform.system() == "Darwin":
+        return restart_macos(**kwargs)
+    if platform.system() == "Linux":
+        return restart_linux(**kwargs)
+    raise RuntimeError("self-service restart supports macOS and systemd-based Linux")
 
 
 def configure_exporter_service(layout: Layout, values: dict[str, str]) -> None:
