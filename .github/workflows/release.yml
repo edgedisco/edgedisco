@@ -1,24 +1,62 @@
-name: Build release
+name: Release
 
 on:
+  release:
+    types: [published]
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0)"
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  macos-release:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            RAW_VER="${{ inputs.version }}"
+          else
+            RAW_VER="${{ github.ref_name }}"
+          fi
+          VER="${RAW_VER#v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VER"
+
+      - name: Build macOS unsigned flat package
+        run: |
+          make macos-pkg VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          shasum -a 256 EdgeDisco-*.pkg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload package assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
-          python-version: "3.12"
-      - run: python -m pip install build
-      - run: python -m build
-      - uses: actions/upload-artifact@v4
+          files: |
+            dist/EdgeDisco-*.pkg
+            dist/SHA256SUMS.txt
+
+      - name: Upload artifact for manual workflow runs
+        uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
         with:
-          name: ai-asset-inventory-${{ github.ref_name }}
-          path: dist/*
+          name: EdgeDisco-${{ steps.version.outputs.version }}-macos-pkg
+          path: |
+            dist/EdgeDisco-*.pkg
+            dist/SHA256SUMS.txt
           if-no-files-found: error
