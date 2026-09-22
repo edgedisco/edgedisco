@@ -1,6 +1,6 @@
 # Native macOS enterprise architecture and deployment roadmap
 
-EdgeDisco currently provides a per-user managed installation under `~/.edgedisco`, using LaunchAgents in the user's GUI domain. This roadmap defines the architecture, packaging, security boundaries, and implementation phases for an enterprise macOS version that can be deployed by administrators as root via MDM (Jamf Pro, Kandji, Mosyle, Microsoft Intune), run background components with appropriate privilege separation, and present a native, lightweight menu bar status application.
+EdgeDisco currently provides a per-user managed installation under `~/.edgedisco`, using LaunchAgents in the user's GUI domain. This roadmap defines the architecture, packaging, security boundaries, and implementation phases for an enterprise macOS version that can be deployed by administrators as root via MDM (Jamf Pro, Kandji, Mosyle, Microsoft Intune), run background components with appropriate privilege separation, present a native, lightweight menu bar status application, and expose on-demand MCP interfaces over stdio.
 
 ---
 
@@ -10,7 +10,7 @@ Enterprise macOS software must respect Apple's modern security architecture: Tra
 
 A monolithic root daemon cannot cleanly handle local AI runtime inspection because developer tools (Cursor, Claude Code, GitHub Copilot) run inside the user's login session and write configuration and hooks inside the user's home directory. Furthermore, starting in macOS 12+, root is subject to TCC protections and cannot read protected user directories without explicit enterprise authorization.
 
-EdgeDisco Enterprise uses a **three-tier architecture**:
+EdgeDisco Enterprise uses a **three-tier architecture** with decoupled on-demand tooling:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -34,22 +34,72 @@ EdgeDisco Enterprise uses a **three-tier architecture**:
 │    - Manages central local SQLite datastore & OTLP outbox   │
 │    - Serves loopback UI (127.0.0.1:8080)                    │
 │    - Enforces MDM configuration policies                    │
+└───────────────────────────┬─────────────────────────────────┘
+                            │ Shared SQLite WAL (Read-Only)
+┌───────────────────────────▼─────────────────────────────────┐
+│ 4. Decoupled Stdio MCP Server (Python / TypeScript CLI)     │
+│    - Spawned on-demand by developer IDEs over stdio         │
+│    - Zero network listeners, zero persistent background RAM │
+│    - Queries local inventory.db directly in read-only mode   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Component roles
 
-| Tier | Lifecycle | Execution Context | Responsibility |
+| Component | Lifecycle | Execution Context | Responsibility |
 | --- | --- | --- | --- |
 | **Menu Bar App** | Login session | Logged-in user | Status visualization, menu actions, browser dashboard bootstrapping |
 | **Per-User Agent** | LaunchAgent (`gui/<uid>`) | Logged-in user | Runtime hooks, user config detection, local event spooling |
 | **System Daemon** | LaunchDaemon (`system`) | Root or `_edgedisco` | Central database, OTLP telemetry delivery, fleet server sync, host process inventory |
+| **MCP Server** | On-demand child process | Invoking IDE process | Serves tools to Cursor, Claude Code, Windsurf via `stdio` (no network port) |
 
 ---
 
-## 2. Native menu bar application (Swift / AppKit)
+## 2. Decoupled on-demand MCP architecture (stdio)
 
-The user interface follows the lightweight model popularized by tools like Tailscale and Osquery:
+The Model Context Protocol (MCP) server is **explicitly excluded from background system daemons and network listeners**:
+
+1. **Protocol standard:** Modern MCP clients (Cursor, Claude Desktop, Claude Code, Windsurf) launch MCP servers as direct child subprocesses communicating over `stdin` and `stdout`.
+2. **Network safety:** Running MCP as an HTTP/SSE network service opens unnecessary local TCP ports, risks port collisions, and creates firewall/proxy friction in enterprise developer environments.
+3. **Resource efficiency:** An on-demand stdio process consumes memory only while the developer's IDE or agent session is active, terminating immediately when the parent process exits.
+4. **Implementation flexibility:**
+   - **Python stdio runner:** Lightweight `edgedisco mcp` command connecting directly to the local SQLite database in read-only mode (`?mode=ro`).
+   - **TypeScript / Node.js package:** Standalone `@edgedisco/mcp` package distributed via npm / npx or bundled in the app, providing a clean TypeScript implementation for web/JS ecosystems.
+   - Both implementations share the exact same underlying SQLite database (`/Library/Application Support/EdgeDisco/data/inventory.db`) and schema without requiring IPC to the daemon.
+
+---
+
+## 3. Architecture option spectrum
+
+### Dimension A: User interface models
+
+| Option | Mechanics | Memory | Pros | Cons |
+| --- | --- | --- | --- | --- |
+| **Option 1: Status Item → Default Browser (Tailscale Model)** *(Recommended)* | Pure Swift `NSStatusItem`. Menu items show quick stats; "Open Dashboard" launches Safari/Chrome to authenticated loopback URL. | 10–15 MB | Minimal memory footprint; 100% reuse of existing responsive web dashboard. | Opens a browser tab instead of an enclosed desktop window. |
+| **Option 2: Native Menu Bar Popover (`WKWebView`)** | Clicking status icon drops down a native popover containing an embedded `WKWebView` rendering the dashboard. | ~40 MB (active) | Feels like an integrated desktop app (Docker Desktop / 1Password Mini model). | Higher memory usage while open; requires WebKit bridge handling. |
+| **Option 3: Headless Daemon (Osquery / Datadog Model)** | No UI or menu bar presence. Background services report directly to enterprise OTLP / fleet server. | 0 MB (no UI) | Zero GUI maintenance; completely invisible to developers. | Developers cannot inspect local observations, verify privacy boundaries, or trigger manual scans. |
+
+### Dimension B: Packaging & registration models
+
+| Option | Mechanics | Target Audience | Pros | Cons |
+| --- | --- | --- | --- | --- |
+| **Option 1: Enterprise Flat `.pkg` with Postinstall** *(Recommended for IT)* | Signed component `.pkg` executed via `installer -target /`. `postinstall` script drops plists into `/Library/` and calls `launchctl`. | MDM (Jamf Pro, Kandji, Intune, Mosyle) | Industry standard for silent, unattended fleet-wide deployments. | Requires root installation privileges. |
+| **Option 2: Modern `SMAppService` Drag-and-Drop `.app`** | App bundle embeds daemon and uses Apple's macOS 13+ `SMAppService` API to register LaunchDaemons/LaunchAgents. | Individual developers & self-service | Clean installation into `/Applications/`; native Ventura+ Login Items UI; clean drag-to-trash uninstall. | Less standard for legacy zero-touch MDM mass pushes without Service Management config profiles. |
+| **Option 3: Dual-Mode Distribution** | Build signed `.app` bundle, then wrap into signed `.pkg` for MDM and `.dmg` for individual download. | Universal fleet + self-service | Accommodates both automated fleet deployment and voluntary developer adoption. | Dual packaging and release artifact pipeline. |
+
+### Dimension C: Core engine runtime
+
+| Option | Technology | Binary Size | Memory Footprint | Engineering Effort |
+| --- | --- | --- | --- | --- |
+| **Option 1: Bundled Python Mach-O** *(Recommended Phase 1)* | Bundle existing engine with `PyInstaller` or `python-build-standalone` into Mach-O executable. | ~45–60 MB | ~40–50 MB idle | Low: 100% reuse of existing detection catalog, fingerprint library, and OTLP encoders. |
+| **Option 2: Compiled Go or Rust Daemon** | Port collector loop, process scanning, and OTLP pipeline to a compiled native binary. | ~10–15 MB | 8–12 MB idle | Medium: Requires re-implementing process scanner and OTLP proto serialization in Go/Rust. |
+| **Option 3: Pure Swift Daemon** | Native Swift daemon using Darwin APIs (`libproc`, `sysctl`, `NSWorkspace`, XPC). | ~12–18 MB | 10–15 MB idle | High: Rewriting entire detection catalog in Swift; unified Swift codebase across UI and daemon. |
+
+---
+
+## 4. Native menu bar application details (Swift / AppKit)
+
+The user interface follows the lightweight model:
 
 - **Technology:** Pure Swift using AppKit (`NSStatusItem` / `NSMenu`). No Electron or heavy web view runtimes.
 - **Resource Footprint:** Target idle memory under 20 MB; zero CPU utilization when idle.
@@ -67,7 +117,7 @@ The user interface follows the lightweight model popularized by tools like Tails
 
 ---
 
-## 3. Packaging & deployment (.pkg vs .app)
+## 5. Packaging & deployment (.pkg vs .app)
 
 ### Deliverable format: Signed `.pkg` installer
 
@@ -91,7 +141,7 @@ EdgeDisco-<version>.pkg
   - `Contents/Library/LaunchAgents/com.edgedisco.agent.plist`: Per-user agent configuration.
   - `Contents/Resources/`: Icons, assets, and web dashboard bundle.
 - `/Library/Application Support/EdgeDisco/`:
-  - `data/`: Central SQLite database (`inventory.db`) with `0700` permissions owned by the system daemon.
+  - `data/`: Central SQLite database (`inventory.db`) with `0755` directory permissions (`0644` WAL database for read-only MCP access).
   - `logs/`: System daemon logs.
   - `config/`: System-wide environment overrides and enrollment keys.
 - `/Library/LaunchDaemons/com.edgedisco.daemon.plist`: Symlinked or copied by `postinstall`.
@@ -111,11 +161,10 @@ EdgeDisco-<version>.pkg
      ```bash
      launchctl bootstrap system /Library/LaunchDaemons/com.edgedisco.daemon.plist
      ```
-   - On macOS 13+, leverages `SMAppService` for programmatic LaunchAgent/LaunchDaemon lifecycle management where available.
 
 ---
 
-## 4. Code signing, notarization, and TCC
+## 6. Code signing, notarization, and TCC
 
 ### Apple Developer ID requirements
 
@@ -140,7 +189,7 @@ To inspect local tool installations and process lineage without triggering user-
 
 ---
 
-## 5. MDM configuration & fleet policy
+## 7. MDM configuration & fleet policy
 
 Enterprise settings are managed without editing shell files via standard Apple Managed Preferences:
 
@@ -161,7 +210,7 @@ Supported MDM payload keys:
 
 ---
 
-## 6. Implementation roadmap
+## 8. Implementation roadmap
 
 ### Phase 1: Self-contained engine bundling & LaunchDaemon packaging
 - Package the existing Python engine into a self-contained Mach-O bundle using `PyInstaller` or `python-build-standalone`, eliminating external interpreter dependencies.
@@ -175,7 +224,12 @@ Supported MDM payload keys:
 - Implement dynamic status icons (healthy, syncing, warning) and menu actions (dashboard launch, scan trigger).
 - Package `EdgeDisco.app` containing the menu bar executable and helper binaries.
 
-### Phase 3: MDM managed preferences & enterprise validation
+### Phase 3: Decoupled stdio MCP tools (Python & TypeScript)
+- Verify direct read-only SQLite access from `stdio` MCP processes.
+- Implement standalone Python `edgedisco-mcp` stdio entrypoint.
+- Author standalone TypeScript `@edgedisco/mcp` client package for npm / npx distribution.
+
+### Phase 4: MDM managed preferences & enterprise validation
 - Implement Managed Preferences parser reading `/Library/Managed Preferences/com.edgedisco.agent.plist`.
 - Ship a downloadable reference `.mobileconfig` profile for MDM distribution.
 - Test deployment across Jamf Pro and Microsoft Intune environments on clean macOS 13, 14, and 15 machines.
