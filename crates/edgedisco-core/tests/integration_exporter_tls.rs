@@ -49,13 +49,19 @@ async fn custom_ca_and_client_identity_complete_mutual_tls_export() {
     let directory = tempfile::tempdir().expect("temporary certificates");
     let ca_cert = directory.path().join("ca.pem");
     let ca_key = directory.path().join("ca-key.pem");
+    let ca_config = directory.path().join("ca.cnf");
     let cert = directory.path().join("cert.pem");
     let key = directory.path().join("key.pem");
     let request = directory.path().join("leaf.csr");
     let config_path = directory.path().join("leaf.cnf");
     std::fs::write(
+        &ca_config,
+        "[req]\ndistinguished_name=dn\nx509_extensions=ca_ext\nprompt=no\n[dn]\nCN=EdgeDisco Test CA\n[ca_ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n",
+    )
+    .expect("CA configuration");
+    std::fs::write(
         &config_path,
-        "[ext]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth,clientAuth\n",
+        "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=localhost\n[ext]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth,clientAuth\n",
     )
     .expect("certificate configuration");
     let ca = Command::new("openssl")
@@ -66,12 +72,8 @@ async fn custom_ca_and_client_identity_complete_mutual_tls_export() {
         .arg(&ca_key)
         .arg("-out")
         .arg(&ca_cert)
-        .args([
-            "-subj",
-            "/CN=EdgeDisco Test CA",
-            "-addext",
-            "basicConstraints=critical,CA:TRUE",
-        ])
+        .arg("-config")
+        .arg(&ca_config)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -83,7 +85,8 @@ async fn custom_ca_and_client_identity_complete_mutual_tls_export() {
         .arg(&key)
         .arg("-out")
         .arg(&request)
-        .args(["-subj", "/CN=localhost"])
+        .arg("-config")
+        .arg(&config_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
