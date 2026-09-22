@@ -50,43 +50,47 @@ The installer installs:
 
 By default, EdgeDisco operates in local inventory mode. To stream discovered AI asset events to an enterprise OpenTelemetry Collector or SIEM:
 
-### Configure via LaunchDaemon Property List
-Edit `/Library/LaunchDaemons/com.edgedisco.daemon.plist` (requires `sudo`):
+### Persistent configuration
+Create `/Library/Application Support/EdgeDisco/config/daemon.json` as
+`root:wheel`, mode `0600`. Package upgrades preserve this file.
 
-```xml
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/libexec/edgedisco/edgedisco</string>
-    <string>daemon</string>
-    <string>--interval</string>
-    <string>60</string>
-    <string>--db</string>
-    <string>/Library/Application Support/EdgeDisco/data/inventory.db</string>
-    <string>--ipc-mode</string>
-    <string>system</string>
-    <string>--ipc-socket</string>
-    <string>/var/run/edgedisco.sock</string>
-    <string>--ipc-allowed-uid</string>
-    <string>0</string>
-    <string>--ipc-allowed-gid</string>
-    <string>20</string>
-    <string>--ipc-owner-uid</string>
-    <string>0</string>
-    <string>--ipc-group-gid</string>
-    <string>20</string>
-    <!-- Add OTLP configuration below -->
-    <string>--otlp-endpoint</string>
-    <string>https://otel-collector.example.com:4318/v1/logs</string>
-    <string>--otlp-batch-size</string>
-    <string>100</string>
-  </array>
+```json
+{
+  "schema_version": 1,
+  "interval_seconds": 60,
+  "otlp_endpoint": "https://otel-collector.example.com:4318/v1/logs",
+  "otlp_batch_size": 100
+}
 ```
+
+Fields other than `schema_version` are optional. A missing file uses CLI defaults.
+Values in the file override the corresponding CLI arguments. Omit `otlp_endpoint`
+to use the CLI endpoint (the packaged service has none, so export is disabled).
+Unknown fields, unsupported versions, malformed JSON, zero intervals/batch sizes,
+and invalid endpoints cause startup to fail before opening the database. The daemon
+never rewrites the file. Keep IPC identity and database paths in the managed plist;
+they are installation policy rather than user tuning.
+
+When upgrading an older installation, the installer imports `--interval`,
+`--otlp-endpoint`, and `--otlp-batch-size` from the old daemon plist if no JSON
+configuration exists. It retains that plist in a private `config/upgrade.*`
+directory. Other custom plist arguments are not imported; review them before an
+upgrade. Future config schemas must have explicit compatibility handling before
+release; version 1 is the only schema currently supported.
 
 ### Apply and Restart the Daemon
 ```bash
 sudo launchctl bootout system/com.edgedisco.daemon
+sudo /usr/local/libexec/edgedisco/edgedisco daemon --prepare \
+  --config '/Library/Application Support/EdgeDisco/config/daemon.json' \
+  --db '/Library/Application Support/EdgeDisco/data/inventory.db'
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.edgedisco.daemon.plist
 ```
+
+Only restart after preparation succeeds. Preparation validates settings and opens
+or migrates the database; it does not scan, send telemetry, or bind an IPC socket.
+See [upgrade and recovery](macos-enterprise-package.md#upgrade-lifecycle) for backup
+locations and downgrade limitations.
 
 ### Testing OTLP Export from CLI
 You can also run a one-shot collection and export directly from the terminal:

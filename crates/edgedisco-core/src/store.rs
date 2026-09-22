@@ -279,6 +279,46 @@ impl Store {
             }
         }
         let conn = Connection::open(path)?;
+        let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > DATABASE_VERSION {
+            return Err(StoreError::DowngradeRefused);
+        }
+        let has_schema: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_schema && version < DATABASE_VERSION {
+            // VACUUM INTO produces a consistent snapshot including committed WAL data.
+            // A private, unique directory avoids overwriting earlier recovery points.
+            let backup_dir = path.with_file_name(format!(
+                "{}.before-v{}-{}.backup",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                version,
+                uuid::Uuid::new_v4()
+            ));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder.create(&backup_dir).map_err(|error| {
+                StoreError::InvalidArgument(format!("cannot create migration backup: {error}"))
+            })?;
+            let backup = backup_dir.join("inventory.db");
+            let pending = backup_dir.join("inventory.db.pending");
+            conn.execute("VACUUM INTO ?1", params![pending.to_string_lossy()])?;
+            std::fs::File::open(&pending)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| {
+                    StoreError::InvalidArgument(format!("cannot sync migration backup: {error}"))
+                })?;
+            std::fs::rename(&pending, &backup).map_err(|error| {
+                StoreError::InvalidArgument(format!("cannot publish migration backup: {error}"))
+            })?;
+            eprintln!("Pre-migration database backup: {}", backup.display());
+        }
         let store = Self {
             conn: Mutex::new(conn),
         };
@@ -493,8 +533,10 @@ impl Store {
                 SELECT id, asset_key, payload_json, payload_bytes, status, attempt_count,
                     next_attempt_at, created_at, delivered_at, last_error_code
                 FROM otlp_outbox;
+                DROP VIEW IF EXISTS outbox;
                 DROP TABLE otlp_outbox;
                 ALTER TABLE otlp_outbox_migrated RENAME TO otlp_outbox;
+                CREATE VIEW outbox AS SELECT * FROM otlp_outbox;
                 CREATE INDEX idx_otlp_outbox_due ON otlp_outbox(status, next_attempt_at);
                 "#,
             )?;

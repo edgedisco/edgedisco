@@ -57,6 +57,8 @@ def test_launchd_plists_are_valid_and_separate_privileges():
     assert daemon["ProgramArguments"] == [
         BINARY_PATH,
         "daemon",
+        "--config",
+        f"{DATA_ROOT}/config/daemon.json",
         "--interval",
         "60",
         "--db",
@@ -110,6 +112,9 @@ def test_staged_scripts_are_repeatable_preserve_state_and_record_ownership(
     agent_target.parent.mkdir(parents=True)
     shutil.copyfile(DAEMON_PLIST, daemon_target)
     shutil.copyfile(AGENT_PLIST, agent_target)
+    old_settings = load_plist(daemon_target)
+    old_settings["ProgramArguments"] += ["--otlp-endpoint", "https://collector.example/v1/logs", "--otlp-batch-size", "37"]
+    daemon_target.write_bytes(plistlib.dumps(old_settings))
     inventory = data / "inventory.db"
     outbox = data / "outbox.db"
     inventory.write_bytes(b"inventory-state")
@@ -136,6 +141,16 @@ def test_staged_scripts_are_repeatable_preserve_state_and_record_ownership(
     )
     assert after == before
     support = root / DATA_ROOT.lstrip("/")
+    import json
+    config = support / "config/daemon.json"
+    assert json.loads(config.read_text()) == {
+        "schema_version": 1, "interval_seconds": 60,
+        "otlp_endpoint": "https://collector.example/v1/logs", "otlp_batch_size": 37,
+    }
+    # Operator settings remain authoritative after subsequent package installs.
+    config.write_text('{"schema_version":1,"interval_seconds":99}')
+    run(PREINSTALL, env=env)
+    assert json.loads(config.read_text())["interval_seconds"] == 99
     assert stat.S_IMODE(support.stat().st_mode) == 0o750
     assert stat.S_IMODE((support / "config").stat().st_mode) == 0o750
     assert stat.S_IMODE((support / "logs").stat().st_mode) == 0o750

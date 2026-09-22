@@ -106,6 +106,98 @@ fn test_foreign_key_enforcement() {
 }
 
 #[test]
+fn migration_backup_preserves_committed_wal_and_original_version() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("inventory.db");
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+        CREATE TABLE recovery_marker(value TEXT);
+        INSERT INTO recovery_marker VALUES('preserve me');
+        ALTER TABLE assets DROP COLUMN present; PRAGMA user_version=3;",
+    )
+    .unwrap();
+    drop(Store::open(&path).unwrap());
+    let backups: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let backup = Connection::open(backups[0].join("inventory.db")).unwrap();
+    let version: u32 = backup
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    let marker: String = backup
+        .query_row("SELECT value FROM recovery_marker", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    assert_eq!(marker, "preserve me");
+    drop(Store::open(&path).unwrap());
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().is_dir())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn failed_migration_keeps_version_and_rolls_back_schema_changes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("inventory.db");
+    let conn = Connection::open(&path).unwrap();
+    // Deliberately incompatible historical schema fails during index creation.
+    conn.execute_batch("CREATE TABLE assets(broken TEXT); PRAGMA user_version=3;")
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    let devices: u32 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='devices'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 3);
+    assert_eq!(devices, 0);
+    assert!(std::fs::read_dir(dir.path())
+        .unwrap()
+        .any(|e| e.unwrap().path().is_dir()));
+}
+
+#[test]
+fn legacy_outbox_migration_preserves_pending_payload_and_view() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TABLE otlp_outbox (
+        id TEXT PRIMARY KEY, asset_key TEXT NOT NULL, payload_json TEXT NOT NULL,
+        payload_bytes INTEGER NOT NULL, status TEXT NOT NULL, attempt_count INTEGER NOT NULL,
+        next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT, last_error_code TEXT);
+        INSERT INTO otlp_outbox VALUES('id','asset','{}',2,'pending',0,'now','now',NULL,NULL);
+        CREATE VIEW outbox AS SELECT * FROM otlp_outbox;
+        PRAGMA user_version=2;").unwrap();
+    drop(Store::open(&path).unwrap());
+    let payload: String = conn
+        .query_row("SELECT payload_json FROM outbox WHERE id='id'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(payload, "{}");
+    let lease: Option<String> = conn
+        .query_row("SELECT lease_id FROM outbox WHERE id='id'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(lease.is_none());
+}
+
+#[test]
 fn test_full_device_and_asset_lifecycle() {
     let dir = tempdir().expect("temp dir");
     let db_path = dir.path().join("lifecycle.db");

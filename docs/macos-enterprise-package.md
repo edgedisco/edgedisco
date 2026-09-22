@@ -96,21 +96,74 @@ The staged-root test runs both lifecycle scripts twice against a temporary path 
 
 ## Upgrade lifecycle
 
-`preinstall` issues only label-scoped launchctl operations for `com.edgedisco.agent` and `com.edgedisco.daemon`. Missing services are harmless. It does not use `killall`, `pkill`, wildcard cleanup, or remove data.
+`preinstall` imports interval and OTLP tuning from an existing daemon plist into
+`config/daemon.json` only when that file does not exist. It keeps the original plist
+in a private `config/upgrade.*` directory. Existing JSON settings are never replaced.
+It then stops only `com.edgedisco.agent` and `com.edgedisco.daemon`. Missing services
+are harmless. Other custom plist arguments require administrator review.
 
 `postinstall`:
 
 1. validates that the binary and both plists exist;
 2. creates only the declared application-support directories;
 3. enforces file and directory modes and ownership without recursively modifying data files;
-4. bootstraps the system daemon; and
-5. when a GUI console session exists, bootstraps the user agent.
+4. runs `daemon --prepare` to validate settings and prepare the database, failing
+   installation if this command fails;
+5. bootstraps the system daemon and requires a valid IPC status response within 30 seconds; and
+6. when a GUI console session exists, bootstraps the user agent.
 
 Reinstalling the same or a newer package preserves `/Library/Application Support/EdgeDisco/data`, including inventory and outbox rows.
 
+The native database schema is currently version 4, independent of the release tag.
+Before migrating an existing older database, the native store uses SQLite
+`VACUUM INTO` to create a consistent snapshot including committed WAL contents.
+The snapshot lives beside the database in
+`inventory.db.before-v<VERSION>-<UUID>.backup/inventory.db`, inside a mode-0700
+directory. Backup failure prevents migration. Backups are retained for administrator
+review and are not pruned automatically. New databases and already-current databases
+do not get migration backups. Keep sufficient disk space for a full snapshot.
+
+Schema changes and the version update share one transaction. A failed migration
+rolls back schema changes. Databases newer than the binary supports are refused.
+The subsequent IPC readiness check verifies that the daemon answers status; it
+does not prove a completed scan or successful network export. Installer failure does not automatically restore the
+previous executable or roll back a successful database migration.
+
+### Releasing a schema change
+
+The current store normalizes known legacy layouts to schema 4; it is not a general
+schema-diff engine. Each future database change must increment `DATABASE_VERSION`,
+add an explicit transformation from the previous supported layout inside the
+existing transaction, and add a populated historical fixture test. Verify inventory,
+pending outbox payloads, and the pre-migration snapshot, as well as rollback on a
+deliberate migration failure. Do not mark an incompatible layout current merely
+because `CREATE TABLE IF NOT EXISTS` succeeds.
+
+Configuration currently has only schema 1. For a future breaking change, retain a
+reader/migration for schema 1, test preservation of operator values, and reject
+unknown future versions before opening the database. Do not bump the JSON schema
+without that compatibility path. New optional settings can retain schema 1 with
+documented defaults, but older binaries will reject unknown keys, so retain the
+matching config when planning a rollback.
+
 ## Roll back an upgrade
 
-Keep the previous package in a protected administrator-controlled location. The following procedure stops only EdgeDisco, records the state hash, installs the previous package, and confirms that state survived. The previous package's `postinstall` bootstraps the daemon before the current console agent, which is the dependency order.
+Keep the previous package and matching configuration in a protected location.
+Reinstalling an older package alone is safe only when it supports the current
+database schema. For a schema downgrade, stop the daemon and all other database
+writers, retain the current database and its WAL/SHM files together for recovery,
+then restore the pre-migration snapshot as `data/inventory.db` with the original
+ownership and permissions. Do not leave newer WAL/SHM files beside the restored
+database. Restore the matching config, then install the previous package. Restoring
+a snapshot loses observations recorded after that snapshot; preserve the newer
+database before doing so.
+
+Releases predating `--config` do not read `daemon.json`. After installing one of
+those releases, reapply the saved operator arguments from `config/upgrade.*` to
+its daemon plist and restart the daemon. Review the arguments against that older
+binary rather than copying new unsupported options into it.
+
+For a same-schema rollback, the following commands inspect the service lifecycle:
 
 ```sh
 PREVIOUS_PKG=/path/to/EdgeDisco-0.1.0.pkg
@@ -118,14 +171,14 @@ DATA='/Library/Application Support/EdgeDisco/data'
 CONSOLE_UID=$(stat -f '%u' /dev/console)
 sudo launchctl bootout "gui/$CONSOLE_UID/com.edgedisco.agent" 2>/dev/null || true
 sudo launchctl bootout system/com.edgedisco.daemon 2>/dev/null || true
-sudo shasum -a 256 "$DATA/inventory.db" > /tmp/edgedisco-inventory.before
 sudo installer -pkg "$PREVIOUS_PKG" -target /
-sudo shasum -a 256 -c /tmp/edgedisco-inventory.before
 sudo launchctl print system/com.edgedisco.daemon
 launchctl print "gui/$CONSOLE_UID/com.edgedisco.agent"
 ```
 
-Do not delete or replace `data` during rollback. If there is no logged-in GUI user, the LaunchAgent loads at the next login; only the daemon is expected immediately.
+Do not delete the data directory. Byte hashes are not an appropriate post-start
+check because the running daemon writes new observations. If there is no logged-in
+GUI user, the LaunchAgent loads at the next login; only the daemon is expected immediately.
 
 ## Future signing and notarization
 

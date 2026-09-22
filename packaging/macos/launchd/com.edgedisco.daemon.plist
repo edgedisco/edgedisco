@@ -8,6 +8,8 @@
   <array>
     <string>/usr/local/libexec/edgedisco/edgedisco</string>
     <string>daemon</string>
+    <string>--config</string>
+    <string>/Library/Application Support/EdgeDisco/config/daemon.json</string>
     <string>--interval</string>
     <string>60</string>
     <string>--db</string>

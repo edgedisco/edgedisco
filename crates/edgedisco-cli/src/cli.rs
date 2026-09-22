@@ -80,8 +80,20 @@ pub struct ServiceArgs {
     pub services: Vec<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct DaemonArgs {
+    /// Optional versioned JSON settings file (missing file uses CLI defaults)
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Validate settings and prepare the database, then exit without collecting
+    #[arg(long)]
+    pub prepare: bool,
+
+    /// Wait up to 30 seconds for the selected daemon IPC endpoint to answer status
+    #[arg(long, conflicts_with_all = ["prepare", "once"])]
+    pub check_ready: bool,
+
     /// Periodic collection interval in seconds (default: 60)
     #[arg(long, default_value_t = 60)]
     pub interval: u64,

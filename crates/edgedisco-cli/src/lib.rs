@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod ipc;
 pub mod service;
 pub mod util;

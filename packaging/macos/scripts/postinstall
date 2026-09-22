@@ -97,8 +97,15 @@ fi
 /usr/sbin/chown root:wheel "$binary" "$daemon_plist" "$agent_plist"
 /usr/sbin/chown root:wheel "$support" "$support/config" "$support/logs" "$support/data"
 
+# Fail installation visibly if settings or database migration are incompatible.
+# Preparation does not scan, export, or bind the service socket.
+"$binary" daemon --prepare --config "$support/config/daemon.json" \
+    --db "$support/data/inventory.db" --ipc-mode system \
+    --ipc-allowed-uid 0 --ipc-allowed-gid 20 --ipc-owner-uid 0 --ipc-group-gid 20
+
 /bin/launchctl bootout "system/$DAEMON_LABEL" >/dev/null 2>&1 || :
 /bin/launchctl bootstrap system "$daemon_plist"
+"$binary" daemon --check-ready --ipc-mode system --ipc-allowed-uid 0
 
 console_uid=$(/usr/bin/stat -f '%u' /dev/console 2>/dev/null || printf '0')
 case "$console_uid" in

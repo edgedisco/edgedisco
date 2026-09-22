@@ -40,6 +40,7 @@ for protected_path in \
     "$ROOT/Library/Application Support" \
     "$ROOT/Library/Application Support/EdgeDisco" \
     "$ROOT/Library/Application Support/EdgeDisco/config" \
+    "$ROOT/Library/Application Support/EdgeDisco/config/daemon.json" \
     "$ROOT/Library/Application Support/EdgeDisco/logs" \
     "$ROOT/Library/Application Support/EdgeDisco/data" \
     "$ROOT/Library/LaunchDaemons" \
@@ -57,6 +58,44 @@ do
         exit 65
     fi
 done
+
+# Import operator tuning from the old package-owned plist once. Keep the
+# original plist as a recovery reference; never replace an existing config.
+support="$ROOT/Library/Application Support/EdgeDisco"
+old_plist="$ROOT/Library/LaunchDaemons/$DAEMON_LABEL.plist"
+config="$support/config/daemon.json"
+if [ -f "$old_plist" ] && [ ! -e "$config" ]; then
+    plutil -lint "$old_plist" >/dev/null
+    [ "$(plutil -type ProgramArguments "$old_plist")" = "array" ] || {
+        printf '%s\n' "existing daemon plist has no ProgramArguments array; refusing settings loss" >&2
+        exit 65
+    }
+    mkdir -p "$support/config"
+    chmod 0750 "$support" "$support/config"
+    work=$(mktemp -d "$support/config/upgrade.XXXXXX")
+    trap 'rm -rf "$work"' EXIT HUP INT TERM
+    cp "$old_plist" "$work/previous-daemon.plist"
+    plutil -create xml1 "$work/daemon.json"
+    plutil -insert schema_version -integer 1 "$work/daemon.json"
+    index=0
+    while value=$(plutil -extract "ProgramArguments.$index" raw -o - "$old_plist" 2>/dev/null); do
+        index=$((index + 1))
+        case "$value" in
+            --interval) key=interval_seconds; type=integer ;;
+            --otlp-endpoint) key=otlp_endpoint; type=string ;;
+            --otlp-batch-size) key=otlp_batch_size; type=integer ;;
+            *) continue ;;
+        esac
+        value=$(plutil -extract "ProgramArguments.$index" raw -o - "$old_plist")
+        plutil -insert "$key" "-$type" "$value" "$work/daemon.json"
+        index=$((index + 1))
+    done
+    plutil -convert json "$work/daemon.json"
+    chmod 0600 "$work/daemon.json" "$work/previous-daemon.plist"
+    # Keep each original under its unique private directory for recovery.
+    mv "$work/daemon.json" "$config"
+    trap - EXIT HUP INT TERM
+fi
 
 if [ "$STAGED" -eq 1 ]; then
     if [ -n "$LIFECYCLE_LOG" ]; then

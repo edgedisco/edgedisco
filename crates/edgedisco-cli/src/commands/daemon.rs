@@ -119,8 +119,18 @@ fn run_and_record_scan(
 
 /// Execute the `edgedisco daemon` command.
 pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved = crate::config::resolve(args)?;
+    let args = &resolved;
+    let policy = ipc_config(args)?;
+    if args.check_ready {
+        return crate::config::check_ready(&policy.socket_path).await;
+    }
     let db_path = default_database_path(None, args.db.as_deref());
     let store = Arc::new(Store::open(&db_path)?);
+    if args.prepare {
+        println!("Configuration and database preparation succeeded");
+        return Ok(());
+    }
 
     println!(
         "EdgeDisco daemon initialized (database: {}, interval: {}s)",
@@ -137,13 +147,7 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     let state = Arc::new(DaemonIpcState::new(current_timestamp()));
     let (scan_tx, mut scan_rx) = mpsc::channel::<ScanCommand>(8);
-    let server = IpcServer::bind(
-        ipc_config(args)?,
-        Arc::clone(&store),
-        Arc::clone(&state),
-        scan_tx,
-    )
-    .await?;
+    let server = IpcServer::bind(policy, Arc::clone(&store), Arc::clone(&state), scan_tx).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let ipc_task = tokio::spawn(server.serve(shutdown_rx));
 
