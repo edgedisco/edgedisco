@@ -43,7 +43,7 @@ swift-test:
 # Narrow macOS packaging gate. This is intentionally separate from the fast
 # Rust loop and from the full legacy Python compatibility suite.
 macos-package-check:
-	$(PYTHON) -m pytest -q packaging/macos/tests/test_packaging.py
+	$(PYTHON) -m pytest -q packaging/macos/tests/test_packaging.py packaging/macos/tests/test_uninstall.py
 
 export VERSION
 macos-pkg:
