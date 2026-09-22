@@ -2,6 +2,8 @@
 use crate::cli::DaemonArgs;
 use edgedisco_core::exporter::{ExporterConfig, OtlpExporter};
 use serde::Deserialize;
+use std::path::PathBuf;
+use std::time::Duration;
 
 pub async fn check_ready(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -37,10 +39,17 @@ struct Settings {
     interval_seconds: Option<u64>,
     otlp_endpoint: Option<String>,
     otlp_batch_size: Option<usize>,
+    otlp_headers: Option<String>,
+    otlp_compression: Option<String>,
+    otlp_timeout_ms: Option<u64>,
+    otlp_ca_certificate: Option<PathBuf>,
+    otlp_client_certificate: Option<PathBuf>,
+    otlp_client_key: Option<PathBuf>,
 }
 
 pub fn resolve(args: &DaemonArgs) -> Result<DaemonArgs, Box<dyn std::error::Error>> {
     let mut resolved = args.clone();
+    let mut transport_settings = None;
     if let Some(path) = &args.config {
         match std::fs::symlink_metadata(path) {
             Ok(metadata) if !metadata.is_file() => {
@@ -52,9 +61,22 @@ pub fn resolve(args: &DaemonArgs) -> Result<DaemonArgs, Box<dyn std::error::Erro
         }
         match std::fs::read(path) {
             Ok(bytes) => {
-                let settings: Settings = serde_json::from_slice(&bytes)?;
+                let settings: Settings = serde_json::from_slice(&bytes)
+                    .map_err(|_| "invalid daemon configuration JSON")?;
                 if settings.schema_version != 1 {
                     return Err("unsupported configuration schema_version; expected 1".into());
+                }
+                if settings.otlp_headers.is_some() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = std::fs::metadata(path)?.permissions().mode();
+                        if mode & 0o077 != 0 {
+                            return Err(
+                                "OTLP headers require a private daemon configuration file".into()
+                            );
+                        }
+                    }
                 }
                 if let Some(interval) = settings.interval_seconds {
                     resolved.interval = interval;
@@ -62,9 +84,10 @@ pub fn resolve(args: &DaemonArgs) -> Result<DaemonArgs, Box<dyn std::error::Erro
                 if let Some(batch) = settings.otlp_batch_size {
                     resolved.otlp_batch_size = batch;
                 }
-                if let Some(endpoint) = settings.otlp_endpoint {
-                    resolved.otlp_endpoint = Some(endpoint);
+                if let Some(endpoint) = &settings.otlp_endpoint {
+                    resolved.otlp_endpoint = Some(endpoint.clone());
                 }
+                transport_settings = Some(settings);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -73,10 +96,41 @@ pub fn resolve(args: &DaemonArgs) -> Result<DaemonArgs, Box<dyn std::error::Erro
     if resolved.interval == 0 || resolved.otlp_batch_size == 0 {
         return Err("interval and OTLP batch size must be greater than zero".into());
     }
-    if let Some(endpoint) = &resolved.otlp_endpoint {
-        let mut config = ExporterConfig::for_endpoint(endpoint);
-        config.batch_records = resolved.otlp_batch_size;
-        OtlpExporter::new(config)?;
+    let mut config = resolved
+        .otlp_endpoint
+        .as_ref()
+        .map(ExporterConfig::for_endpoint);
+    if let Some(settings) = transport_settings {
+        let transport_configured = settings.otlp_headers.is_some()
+            || settings.otlp_compression.is_some()
+            || settings.otlp_timeout_ms.is_some()
+            || settings.otlp_ca_certificate.is_some()
+            || settings.otlp_client_certificate.is_some()
+            || settings.otlp_client_key.is_some();
+        if transport_configured && config.is_none() {
+            return Err("OTLP transport settings require otlp_endpoint".into());
+        }
+        if let Some(config) = config.as_mut() {
+            config.headers = settings.otlp_headers;
+            config.compression = match settings.otlp_compression.as_deref() {
+                None | Some("") => false,
+                Some("gzip") => true,
+                Some(_) => return Err("invalid otlp_compression".into()),
+            };
+            if let Some(timeout_ms) = settings.otlp_timeout_ms {
+                if !(1..60_000).contains(&timeout_ms) {
+                    return Err("invalid otlp_timeout_ms".into());
+                }
+                config.request_timeout = Duration::from_millis(timeout_ms);
+            }
+            config.ca_certificate = settings.otlp_ca_certificate;
+            config.client_certificate = settings.otlp_client_certificate;
+            config.client_key = settings.otlp_client_key;
+        }
     }
+    if let Some(config) = config.as_mut() {
+        config.batch_records = resolved.otlp_batch_size;
+    }
+    resolved.otlp_exporter = config.map(OtlpExporter::new).transpose()?.map(Box::new);
     Ok(resolved)
 }

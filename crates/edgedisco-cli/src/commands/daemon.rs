@@ -4,7 +4,6 @@ use crate::util::{
     current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
     get_os_version, local_device_id, random_token_hash,
 };
-use edgedisco_core::exporter::{ExporterConfig, OtlpExporter};
 use edgedisco_core::models::Device;
 use edgedisco_core::store::Store;
 use std::collections::BTreeSet;
@@ -51,12 +50,9 @@ async fn export_outbox_if_configured(
     store: &Store,
     args: &DaemonArgs,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(endpoint) = &args.otlp_endpoint else {
+    let Some(exporter) = &args.otlp_exporter else {
         return Ok(());
     };
-    let mut config = ExporterConfig::for_endpoint(endpoint);
-    config.batch_records = args.otlp_batch_size;
-    let exporter = OtlpExporter::new(config)?;
     let outcome = exporter.export_once_at(store, &current_timestamp()).await?;
     if outcome.claimed > 0 {
         eprintln!(

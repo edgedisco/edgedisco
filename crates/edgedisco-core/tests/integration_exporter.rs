@@ -1,6 +1,7 @@
 use edgedisco_core::exporter::{encode_otlp_request, retry_delay, ExporterConfig, OtlpExporter};
 use edgedisco_core::models::OutboxRecord;
 use edgedisco_core::store::Store;
+use flate2::read::GzDecoder;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
@@ -9,7 +10,15 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
-fn spawn_http_server(statuses: Vec<u16>) -> (String, thread::JoinHandle<Vec<Vec<u8>>>) {
+struct CapturedRequest {
+    headers: String,
+    body: Vec<u8>,
+}
+
+fn spawn_http_server(
+    statuses: Vec<u16>,
+    compressed: bool,
+) -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
     let address = listener.local_addr().expect("server address");
     let handle = thread::spawn(move || {
@@ -40,8 +49,23 @@ fn spawn_http_server(statuses: Vec<u16>) -> (String, thread::JoinHandle<Vec<Vec<
                     let body_start = header_end + 4;
                     if received.len() >= body_start + content_length {
                         let body = &received[body_start..body_start + content_length];
-                        ExportLogsServiceRequest::decode(body).expect("OTLP protobuf payload");
-                        payloads.push(body.to_vec());
+                        let mut decoded = Vec::new();
+                        if compressed {
+                            assert!(header
+                                .to_ascii_lowercase()
+                                .contains("content-encoding: gzip"));
+                            GzDecoder::new(body)
+                                .read_to_end(&mut decoded)
+                                .expect("decompress OTLP protobuf");
+                        } else {
+                            decoded.extend_from_slice(body);
+                        }
+                        ExportLogsServiceRequest::decode(decoded.as_slice())
+                            .expect("OTLP protobuf payload");
+                        payloads.push(CapturedRequest {
+                            headers: header.into_owned(),
+                            body: decoded,
+                        });
                         break;
                     }
                 }
@@ -80,16 +104,14 @@ async fn retries_with_exponential_backoff_then_marks_accepted_batch_delivered() 
     store
         .insert_outbox(&pending_record())
         .expect("insert event");
-    let (endpoint, server) = spawn_http_server(vec![503, 202]);
-    let exporter = OtlpExporter::new(ExporterConfig {
-        endpoint,
-        batch_records: 10,
-        batch_bytes: 1024 * 1024,
-        initial_backoff: Duration::from_secs(1),
-        max_backoff: Duration::from_secs(8),
-        request_timeout: Duration::from_secs(2),
-    })
-    .expect("exporter");
+    let (endpoint, server) = spawn_http_server(vec![503, 202], false);
+    let mut config = ExporterConfig::for_endpoint(endpoint);
+    config.batch_records = 10;
+    config.batch_bytes = 1024 * 1024;
+    config.initial_backoff = Duration::from_secs(1);
+    config.max_backoff = Duration::from_secs(8);
+    config.request_timeout = Duration::from_secs(2);
+    let exporter = OtlpExporter::new(config).expect("exporter");
 
     let first = exporter
         .export_once_at(&store, "2026-09-22T00:00:00Z")
@@ -112,7 +134,8 @@ async fn retries_with_exponential_backoff_then_marks_accepted_batch_delivered() 
 
     let payloads = server.join().expect("server thread");
     assert_eq!(payloads.len(), 2);
-    let request = ExportLogsServiceRequest::decode(payloads[0].as_slice()).expect("decode request");
+    let request =
+        ExportLogsServiceRequest::decode(payloads[0].body.as_slice()).expect("decode request");
     let resource = request.resource_logs[0]
         .resource
         .as_ref()
@@ -142,6 +165,38 @@ async fn retries_with_exponential_backoff_then_marks_accepted_batch_delivered() 
     }));
 }
 
+#[tokio::test]
+async fn gzip_and_custom_headers_reach_collector_without_changing_protobuf() {
+    let store = Store::open_in_memory().expect("store");
+    store
+        .insert_outbox(&pending_record())
+        .expect("insert event");
+    let (endpoint, server) = spawn_http_server(vec![200], true);
+    let mut config = ExporterConfig::for_endpoint(endpoint);
+    config.compression = true;
+    config.headers = Some("Authorization=Bearer%20SECRET,x-trace=a%2Cb%3Dc".into());
+    let exporter = OtlpExporter::new(config).expect("exporter");
+
+    let outcome = exporter
+        .export_once_at(&store, "2026-09-22T00:00:00Z")
+        .await
+        .expect("export compressed event");
+    assert_eq!(outcome.delivered, 1);
+    let requests = server.join().expect("server thread");
+    let request = &requests[0];
+    let headers = request.headers.to_ascii_lowercase();
+    assert!(headers.contains("authorization: bearer secret"));
+    assert!(headers.contains("x-trace: a,b=c"));
+    assert!(headers.contains("user-agent: edgedisco/"));
+    assert!(!request.body.windows(6).any(|part| part == b"SECRET"));
+    let decoded =
+        ExportLogsServiceRequest::decode(request.body.as_slice()).expect("decode request");
+    assert_eq!(
+        decoded.resource_logs[0].scope_logs[0].log_records[0].event_name,
+        "edgedisco.asset.observed"
+    );
+}
+
 #[test]
 fn backoff_doubles_and_caps() {
     let initial = Duration::from_secs(2);
@@ -164,15 +219,13 @@ async fn invalid_payload_is_failed_instead_of_stranding_its_lease() {
         "2026-09-22T00:00:00Z",
     );
     store.insert_outbox(&record).expect("insert event");
-    let exporter = OtlpExporter::new(ExporterConfig {
-        endpoint: "http://127.0.0.1:9/v1/logs".into(),
-        batch_records: 10,
-        batch_bytes: 1024,
-        initial_backoff: Duration::from_secs(1),
-        max_backoff: Duration::from_secs(8),
-        request_timeout: Duration::from_secs(1),
-    })
-    .expect("exporter");
+    let mut config = ExporterConfig::for_endpoint("http://127.0.0.1:9/v1/logs");
+    config.batch_records = 10;
+    config.batch_bytes = 1024;
+    config.initial_backoff = Duration::from_secs(1);
+    config.max_backoff = Duration::from_secs(8);
+    config.request_timeout = Duration::from_secs(1);
+    let exporter = OtlpExporter::new(config).expect("exporter");
 
     let outcome = exporter
         .export_once_at(&store, "2026-09-22T00:00:00Z")

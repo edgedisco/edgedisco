@@ -1,5 +1,6 @@
 use crate::store::{Store, StoreError};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use flate2::{write::GzEncoder, Compression};
 use opentelemetry_proto::tonic::collector::logs::v1::{
     ExportLogsServiceRequest, ExportLogsServiceResponse,
 };
@@ -7,9 +8,11 @@ use opentelemetry_proto::tonic::common::v1::{any_value, AnyValue, Instrumentatio
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use prost::Message;
-use reqwest::{Client, Url};
+use reqwest::{header, Certificate, Client, Identity, Url};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
@@ -19,7 +22,7 @@ const INVENTORY_EVENT_NAME: &str = "edgedisco.device.inventory";
 const OTLP_CONTENT_TYPE: &str = "application/x-protobuf";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExporterConfig {
     pub endpoint: String,
     pub batch_records: usize,
@@ -27,6 +30,32 @@ pub struct ExporterConfig {
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
     pub request_timeout: Duration,
+    /// Comma-separated OTLP headers. Values are deliberately redacted in Debug output.
+    pub headers: Option<String>,
+    pub compression: bool,
+    pub ca_certificate: Option<PathBuf>,
+    pub client_certificate: Option<PathBuf>,
+    pub client_key: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for ExporterConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExporterConfig")
+            .field("endpoint", &"<redacted>")
+            .field("batch_records", &self.batch_records)
+            .field("batch_bytes", &self.batch_bytes)
+            .field("request_timeout", &self.request_timeout)
+            .field("headers_configured", &self.headers.is_some())
+            .field("compression", &self.compression)
+            .field("ca_certificate_configured", &self.ca_certificate.is_some())
+            .field(
+                "client_certificate_configured",
+                &self.client_certificate.is_some(),
+            )
+            .field("client_key_configured", &self.client_key.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ExporterConfig {
@@ -34,10 +63,15 @@ impl ExporterConfig {
         Self {
             endpoint: endpoint.into(),
             batch_records: 100,
-            batch_bytes: 512 * 1024,
+            batch_bytes: 1024 * 1024,
             initial_backoff: Duration::from_secs(1),
             max_backoff: Duration::from_secs(300),
             request_timeout: Duration::from_secs(10),
+            headers: None,
+            compression: false,
+            ca_certificate: None,
+            client_certificate: None,
+            client_key: None,
         }
     }
 }
@@ -65,10 +99,19 @@ pub enum ExportError {
     Client(#[from] reqwest::Error),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OtlpExporter {
     config: ExporterConfig,
     client: Client,
+}
+
+impl std::fmt::Debug for OtlpExporter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OtlpExporter")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 pub fn retry_delay(initial: Duration, maximum: Duration, attempt_count: u32) -> Duration {
@@ -89,6 +132,95 @@ fn add_seconds(value: &str, seconds: u64) -> Result<String, ExportError> {
         .checked_add_signed(ChronoDuration::seconds(seconds))
         .ok_or_else(|| ExportError::Timestamp(value.to_string()))?;
     Ok(advanced.to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+fn parse_headers(raw: Option<&str>) -> Result<header::HeaderMap, ExportError> {
+    let mut headers = header::HeaderMap::new();
+    let Some(raw) = raw else {
+        return Ok(headers);
+    };
+    if raw.is_empty() {
+        return Ok(headers);
+    }
+    const RESERVED: &[&str] = &[
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "host",
+        "connection",
+        "user-agent",
+        "transfer-encoding",
+        "trailer",
+        "te",
+        "upgrade",
+        "cookie",
+        "proxy-authorization",
+        "proxy-connection",
+    ];
+    for entry in raw.split(',') {
+        let (name, encoded) = entry
+            .trim()
+            .split_once('=')
+            .ok_or_else(|| ExportError::Config("invalid OTLP headers".into()))?;
+        let name = name.trim().to_ascii_lowercase();
+        let name = header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| ExportError::Config("invalid OTLP headers".into()))?;
+        if RESERVED.contains(&name.as_str()) || headers.contains_key(&name) {
+            return Err(ExportError::Config("invalid OTLP headers".into()));
+        }
+        let encoded = encoded.trim().as_bytes();
+        let mut decoded = Vec::with_capacity(encoded.len());
+        let mut offset = 0;
+        while offset < encoded.len() {
+            let byte = if encoded[offset] == b'%' {
+                let digits = encoded
+                    .get(offset + 1..offset + 3)
+                    .ok_or_else(|| ExportError::Config("invalid OTLP headers".into()))?;
+                let hex = std::str::from_utf8(digits)
+                    .map_err(|_| ExportError::Config("invalid OTLP headers".into()))?;
+                offset += 3;
+                u8::from_str_radix(hex, 16)
+                    .map_err(|_| ExportError::Config("invalid OTLP headers".into()))?
+            } else {
+                let byte = encoded[offset];
+                offset += 1;
+                byte
+            };
+            if !(32..=126).contains(&byte) || byte == b';' {
+                return Err(ExportError::Config("invalid OTLP headers".into()));
+            }
+            decoded.push(byte);
+        }
+        let value = header::HeaderValue::from_bytes(&decoded)
+            .map_err(|_| ExportError::Config("invalid OTLP headers".into()))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
+fn read_certificate(path: &Path, setting: &str, private: bool) -> Result<Vec<u8>, ExportError> {
+    let invalid = || ExportError::Config(format!("invalid {setting}"));
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| invalid())?;
+    if !metadata.file_type().is_file() {
+        return Err(invalid());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let forbidden = if private { 0o077 } else { 0o022 };
+        if metadata.permissions().mode() & forbidden != 0 {
+            return Err(invalid());
+        }
+    }
+    std::fs::read(path).map_err(|_| invalid())
+}
+
+fn gzip_payload(payload: &[u8]) -> Result<Vec<u8>, ExportError> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(payload)
+        .and_then(|()| encoder.finish())
+        .map_err(|_| ExportError::Payload("OTLP gzip encoding failed".into()))
 }
 
 fn otlp_value(value: &Value) -> Result<AnyValue, ExportError> {
@@ -428,31 +560,75 @@ fn classify_success_response(body: &[u8]) -> Result<bool, ExportError> {
 
 impl OtlpExporter {
     pub fn new(config: ExporterConfig) -> Result<Self, ExportError> {
-        if config.batch_records == 0 || config.batch_bytes <= 0 {
+        if config.batch_records == 0 || config.batch_bytes <= 0 || config.request_timeout.is_zero()
+        {
             return Err(ExportError::Config(
-                "batch record and byte limits must be positive".into(),
+                "batch limits and request timeout must be positive".into(),
             ));
         }
+        if config
+            .endpoint
+            .bytes()
+            .any(|byte| !(33..=126).contains(&byte) || byte == b'\\')
+        {
+            return Err(ExportError::Config("invalid OTLP endpoint".into()));
+        }
         let endpoint = Url::parse(&config.endpoint)
-            .map_err(|error| ExportError::Config(format!("invalid endpoint: {error}")))?;
+            .map_err(|_| ExportError::Config("invalid OTLP endpoint".into()))?;
+        if endpoint.username() != ""
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || endpoint.host_str().is_none()
+            || endpoint.port() == Some(0)
+        {
+            return Err(ExportError::Config("invalid OTLP endpoint".into()));
+        }
         let loopback_http = endpoint.scheme() == "http"
             && endpoint.host_str().is_some_and(|host| {
-                host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|ip| ip.is_loopback())
+                host.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
             });
         if endpoint.scheme() != "https" && !loopback_http {
             return Err(ExportError::Config(
-                "endpoint must use HTTPS (HTTP is permitted only for loopback tests)".into(),
+                "endpoint must use HTTPS or a literal loopback HTTP address".into(),
             ));
         }
-        let client = Client::builder()
+        if config.client_certificate.is_some() != config.client_key.is_some() {
+            return Err(ExportError::Config(
+                "OTLP client certificate and key must be configured together".into(),
+            ));
+        }
+        let headers = parse_headers(config.headers.as_deref())?;
+        let mut client_builder = Client::builder()
             .https_only(!loopback_http)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .timeout(config.request_timeout)
-            .build()?;
+            .default_headers(headers);
+        if let Some(path) = &config.ca_certificate {
+            let pem = read_certificate(path, "OTLP CA certificate", false)?;
+            let certificates = Certificate::from_pem_bundle(&pem)
+                .map_err(|_| ExportError::Config("invalid OTLP CA certificate".into()))?;
+            if certificates.is_empty() {
+                return Err(ExportError::Config("invalid OTLP CA certificate".into()));
+            }
+            for certificate in certificates {
+                client_builder = client_builder.add_root_certificate(certificate);
+            }
+        }
+        if let (Some(cert_path), Some(key_path)) = (&config.client_certificate, &config.client_key)
+        {
+            let mut pem = read_certificate(cert_path, "OTLP client certificate", false)?;
+            let key = read_certificate(key_path, "OTLP client key", true)?;
+            pem.push(b'\n');
+            pem.extend_from_slice(&key);
+            let identity = Identity::from_pem(&pem).map_err(|_| {
+                ExportError::Config("invalid OTLP client certificate or key".into())
+            })?;
+            client_builder = client_builder.identity(identity);
+        }
+        let client = client_builder.build()?;
         Ok(Self { config, client })
     }
 
@@ -506,6 +682,11 @@ impl OtlpExporter {
             resource_logs: log_records.into_iter().map(resource_logs).collect(),
         }
         .encode_to_vec();
+        let payload = if self.config.compression {
+            gzip_payload(&payload)?
+        } else {
+            payload
+        };
         let ids: Vec<&str> = valid_records
             .iter()
             .map(|record| record.id.as_str())
@@ -517,14 +698,18 @@ impl OtlpExporter {
             .unwrap_or(0)
             .max(0) as u32;
 
-        match self
+        let mut request = self
             .client
             .post(&self.config.endpoint)
-            .header(reqwest::header::CONTENT_TYPE, OTLP_CONTENT_TYPE)
-            .body(payload)
-            .send()
-            .await
-        {
+            .header(header::CONTENT_TYPE, OTLP_CONTENT_TYPE)
+            .header(
+                header::USER_AGENT,
+                format!("edgedisco/{}", env!("CARGO_PKG_VERSION")),
+            );
+        if self.config.compression {
+            request = request.header(header::CONTENT_ENCODING, "gzip");
+        }
+        match request.body(payload).send().await {
             Ok(mut response) => {
                 let status = response.status().as_u16();
                 let mut body = Vec::new();
@@ -700,5 +885,34 @@ mod tests {
         }
         .encode_to_vec();
         assert!(classify_success_response(&response).expect("valid partial response"));
+    }
+
+    #[test]
+    fn endpoint_and_header_validation_never_echo_credentials() {
+        for endpoint in [
+            "http://localhost:4318/v1/logs",
+            "http://192.168.1.5:4318/v1/logs",
+            "https://user:SECRET@example.org/v1/logs",
+            "https://example.org/v1/logs?token=SECRET",
+            "https://example.org/v1/logs#SECRET",
+        ] {
+            let error = OtlpExporter::new(ExporterConfig::for_endpoint(endpoint))
+                .expect_err("unsafe endpoint must fail");
+            assert!(!error.to_string().contains("SECRET"));
+        }
+        for raw in [
+            "Authorization=SECRET,authorization=SECRET",
+            "Host=SECRET",
+            "Cookie=SECRET",
+            "x-test=SECRET%0d%0aInjected",
+            "x-test=SECRET%zz",
+            "x-test=SECRET;metadata",
+        ] {
+            let mut config = ExporterConfig::for_endpoint("https://example.org/v1/logs");
+            config.headers = Some(raw.into());
+            let error = OtlpExporter::new(config.clone()).expect_err("unsafe header must fail");
+            assert!(!error.to_string().contains("SECRET"));
+            assert!(!format!("{config:?}").contains("SECRET"));
+        }
     }
 }

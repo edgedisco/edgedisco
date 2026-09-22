@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use edgedisco_core::exporter::OtlpExporter;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -113,6 +114,10 @@ pub struct DaemonArgs {
     /// Maximum outbox records per OTLP request
     #[arg(long, default_value_t = 100)]
     pub otlp_batch_size: usize,
+
+    /// Validated settings loaded from the private daemon JSON file.
+    #[arg(skip)]
+    pub otlp_exporter: Option<Box<OtlpExporter>>,
 
     /// Unix-domain socket path for local IPC (defaults by IPC mode)
     #[arg(long)]

@@ -44,6 +44,27 @@ fn persistent_settings_override_defaults_without_rewriting() {
 }
 
 #[test]
+fn private_otlp_transport_settings_validate_before_database_open() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("daemon.json");
+    let text = r#"{"schema_version":1,"otlp_endpoint":"https://collector.example.org/v1/logs","otlp_headers":"Authorization=Bearer%20SECRET","otlp_compression":"gzip","otlp_timeout_ms":2500}"#;
+    std::fs::write(&path, text).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let cli = Cli::parse_from(["edgedisco", "daemon", "--config", path.to_str().unwrap()]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    let resolved = config::resolve(&args).expect("valid private collector settings");
+    assert!(resolved.otlp_exporter.is_some());
+    assert!(!format!("{resolved:?}").contains("SECRET"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
 fn bad_configuration_fails_before_database_creation() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("daemon.json");
@@ -54,6 +75,10 @@ fn bad_configuration_fails_before_database_creation() {
         r#"{"schema_version":1,"interval_seconds":0}"#,
         r#"{"schema_version":1,"otlp_batch_size":0}"#,
         r#"{"schema_version":1,"otlp_endpoint":"invalid"}"#,
+        r#"{"schema_version":1,"otlp_headers":"Authorization=SECRET"}"#,
+        r#"{"schema_version":1,"otlp_endpoint":"https://example.org/v1/logs","otlp_compression":"zstd"}"#,
+        r#"{"schema_version":1,"otlp_endpoint":"https://example.org/v1/logs","otlp_timeout_ms":0}"#,
+        r#"{"schema_version":1,"otlp_endpoint":"https://example.org/v1/logs","otlp_client_certificate":"/missing/SECRET.pem"}"#,
         "broken",
     ] {
         std::fs::write(&path, text).unwrap();
@@ -67,6 +92,22 @@ fn bad_configuration_fails_before_database_creation() {
         assert!(!result.status.success(), "accepted {text}");
         assert!(!db.exists());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn otlp_headers_require_private_configuration_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("daemon.json");
+    std::fs::write(&path, r#"{"schema_version":1,"otlp_endpoint":"https://example.org/v1/logs","otlp_headers":"Authorization=SECRET"}"#).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let cli = Cli::parse_from(["edgedisco", "daemon", "--config", path.to_str().unwrap()]);
+    let Commands::Daemon(args) = cli.command else {
+        panic!()
+    };
+    let error = config::resolve(&args).expect_err("world-readable header configuration must fail");
+    assert!(!error.to_string().contains("SECRET"));
 }
 
 #[test]

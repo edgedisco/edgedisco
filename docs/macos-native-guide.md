@@ -59,11 +59,22 @@ Create `/Library/Application Support/EdgeDisco/config/daemon.json` as
   "schema_version": 1,
   "interval_seconds": 60,
   "otlp_endpoint": "https://otel-collector.example.com:4318/v1/logs",
-  "otlp_batch_size": 100
+  "otlp_batch_size": 100,
+  "otlp_headers": "Authorization=Bearer%20TOKEN",
+  "otlp_compression": "gzip",
+  "otlp_timeout_ms": 10000,
+  "otlp_ca_certificate": "/Library/Application Support/EdgeDisco/config/collector-ca.pem",
+  "otlp_client_certificate": "/Library/Application Support/EdgeDisco/config/client.pem",
+  "otlp_client_key": "/Library/Application Support/EdgeDisco/config/client-key.pem"
 }
 ```
 
 Fields other than `schema_version` are optional. A missing file uses CLI defaults.
+The OTLP header string uses comma-separated `key=value` entries with percent-encoded values.
+Header names are case-insensitive; duplicate, transport-owned, and malformed headers are rejected.
+Keep the configuration file at mode `0600` when it contains headers. The CA and client certificate
+files must be regular files without group or world write access; the client key must be mode `0600`.
+Configure the client certificate and key together. Omit unused TLS fields and compression settings.
 Values in the file override the corresponding CLI arguments. Omit `otlp_endpoint`
 to use the CLI endpoint (the packaged service has none, so export is disabled).
 Unknown fields, unsupported versions, malformed JSON, zero intervals/batch sizes,
