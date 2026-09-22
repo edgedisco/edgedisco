@@ -289,7 +289,7 @@ pub fn validate_asset(asset: &Asset, schema_version: u32) -> Result<(), Redactio
     }
     if !matches!(
         asset.kind.as_str(),
-        "application" | "process" | "agent_runtime" | "mcp_server"
+        "application" | "container_application" | "process" | "agent_runtime" | "mcp_server"
     ) {
         return Err(RedactionError::UnsupportedAssetKind(asset.kind.clone()));
     }

@@ -47,6 +47,10 @@ fn test_parse_daemon_command() {
         "--db",
         "/tmp/custom.db",
         "--once",
+        "--otlp-endpoint",
+        "https://telemetry.example/v1/logs",
+        "--otlp-batch-size",
+        "25",
     ])
     .expect("parse daemon");
     match cli.command {
@@ -54,6 +58,11 @@ fn test_parse_daemon_command() {
             assert_eq!(args.interval, 30);
             assert_eq!(args.db, Some(PathBuf::from("/tmp/custom.db")));
             assert!(args.once);
+            assert_eq!(
+                args.otlp_endpoint.as_deref(),
+                Some("https://telemetry.example/v1/logs")
+            );
+            assert_eq!(args.otlp_batch_size, 25);
         }
         _ => panic!("expected Daemon command"),
     }

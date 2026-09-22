@@ -841,6 +841,35 @@ impl Store {
         Ok(claimed)
     }
 
+    /// Mark claimed records for retry and schedule the next exponential-backoff attempt.
+    pub fn retry_outbox(
+        &self,
+        ids: &[&str],
+        error_code: &str,
+        http_status: Option<i64>,
+        now: &str,
+        next_attempt_at: &str,
+    ) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        let mut updated_count = 0;
+        for &id in ids {
+            updated_count += conn.execute(
+                r#"
+                UPDATE otlp_outbox
+                SET status = 'retry', attempt_count = attempt_count + 1,
+                    next_attempt_at = ?1, last_error_code = ?2,
+                    last_http_status = ?3, last_attempt_at = ?4,
+                    lease_id = NULL, lease_expires_at = NULL
+                WHERE id = ?5 AND status = 'sending'
+                "#,
+                params![next_attempt_at, error_code, http_status, now, id],
+            )?;
+        }
+        conn.execute("COMMIT", [])?;
+        Ok(updated_count)
+    }
+
     /// Mark outbox records as delivered, failed, or retry.
     pub fn finish_outbox(
         &self,

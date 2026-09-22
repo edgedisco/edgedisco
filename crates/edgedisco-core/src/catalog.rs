@@ -275,10 +275,7 @@ pub fn classify_text(text: &str) -> Option<(&'static str, &'static str)> {
     for agent in &cat.agents {
         for marker in &agent.display_markers {
             if contains_signature(text, marker) {
-                return Some((
-                    Box::leak(agent.name.clone().into_boxed_str()),
-                    Box::leak(agent.vendor.clone().into_boxed_str()),
-                ));
+                return Some((agent.name.as_str(), agent.vendor.as_str()));
             }
         }
     }
@@ -302,10 +299,7 @@ pub fn classify_process_name(name: &str) -> Option<(&'static str, &'static str)>
     for agent in &cat.agents {
         for exe in &agent.executables {
             if exe.to_lowercase() == lowered {
-                return Some((
-                    Box::leak(agent.name.clone().into_boxed_str()),
-                    Box::leak(agent.vendor.clone().into_boxed_str()),
-                ));
+                return Some((agent.name.as_str(), agent.vendor.as_str()));
             }
         }
     }

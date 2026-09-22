@@ -38,6 +38,10 @@ pub struct ScanArgs {
     /// Format output as pretty-printed JSON
     #[arg(long)]
     pub pretty: bool,
+
+    /// Persist discovered assets to this SQLite inventory database
+    #[arg(long)]
+    pub db: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -79,4 +83,12 @@ pub struct DaemonArgs {
     /// Run a single collection iteration and exit
     #[arg(long)]
     pub once: bool,
+
+    /// OTLP/HTTP logs endpoint (HTTPS required outside loopback tests)
+    #[arg(long)]
+    pub otlp_endpoint: Option<String>,
+
+    /// Maximum outbox records per OTLP request
+    #[arg(long, default_value_t = 100)]
+    pub otlp_batch_size: usize,
 }

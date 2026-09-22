@@ -3,10 +3,11 @@ use crate::util::{
     current_timestamp, default_database_path, get_hostname, get_machine, get_os_name,
     get_os_version,
 };
+use edgedisco_core::exporter::{ExporterConfig, OtlpExporter};
 use edgedisco_core::models::Device;
 use edgedisco_core::redaction::sha256_digest;
 use edgedisco_core::store::Store;
-use edgedisco_sensor::{scan_host_processes, scan_processes};
+use edgedisco_sensor::{scan_available_containers, scan_host_processes, scan_processes};
 use std::time::Duration;
 use tokio::signal;
 
@@ -44,7 +45,10 @@ pub fn run_daemon_iteration(store: &Store) -> Result<usize, Box<dyn std::error::
     let now = current_timestamp();
 
     let observations = scan_host_processes()?;
-    let assets = scan_processes(&observations);
+    let assets = super::scan::combine_discovery_assets(
+        scan_processes(&observations),
+        scan_available_containers(),
+    );
     let asset_count = assets.len();
 
     for asset in &assets {
@@ -52,6 +56,28 @@ pub fn run_daemon_iteration(store: &Store) -> Result<usize, Box<dyn std::error::
     }
 
     Ok(asset_count)
+}
+
+async fn export_outbox_if_configured(
+    store: &Store,
+    args: &DaemonArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(endpoint) = &args.otlp_endpoint else {
+        return Ok(());
+    };
+    let mut config = ExporterConfig::for_endpoint(endpoint);
+    config.batch_records = args.otlp_batch_size;
+    let exporter = OtlpExporter::new(config)?;
+    let outcome = exporter.export_once_at(store, &current_timestamp()).await?;
+    if outcome.claimed > 0 {
+        eprintln!(
+            "[{}] OTLP export: {} delivered, {} scheduled for retry",
+            current_timestamp(),
+            outcome.delivered,
+            outcome.retried
+        );
+    }
+    Ok(())
 }
 
 /// Execute the `edgedisco daemon` command.
@@ -67,6 +93,7 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
 
     if args.once {
         let count = run_daemon_iteration(&store)?;
+        export_outbox_if_configured(&store, args).await?;
         println!("Single collection iteration complete: {count} assets discovered and updated.");
         return Ok(());
     }
@@ -80,6 +107,9 @@ pub async fn run_daemon(args: &DaemonArgs) -> Result<(), Box<dyn std::error::Err
                 match run_daemon_iteration(&store) {
                     Ok(count) => {
                         eprintln!("[{}] Observation pass complete: {} assets", current_timestamp(), count);
+                        if let Err(e) = export_outbox_if_configured(&store, args).await {
+                            eprintln!("[{}] OTLP export error: {}", current_timestamp(), e);
+                        }
                     }
                     Err(e) => {
                         eprintln!("[{}] Error during observation pass: {}", current_timestamp(), e);
