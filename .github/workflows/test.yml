@@ -18,6 +18,18 @@ jobs:
       - name: Rust release build
         run: make build-rust
 
+  macos-package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packaging test runner
+        run: python -m pip install pytest
+      - name: Verify native macOS package pipeline
+        run: make macos-package-check
+
   # The Python implementation is compatibility coverage during the port. It
   # must never be part of the normal Rust push/PR gate.
   legacy-python:

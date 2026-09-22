@@ -1,4 +1,4 @@
-.PHONY: test check build test-rust check-rust build-rust test-python check-python build-python clean macos-pkg
+.PHONY: test check build test-rust check-rust build-rust test-python check-python build-python macos-package-check clean macos-pkg
 
 # Rust is the active implementation. The default targets must not pull the
 # legacy Python suite into every Rust iteration.
@@ -33,6 +33,11 @@ check-python: test-python
 
 build-python: check-python
 	$(PYTHON) -m pip wheel . --no-deps --no-build-isolation -w dist
+
+# Narrow macOS packaging gate. This is intentionally separate from the fast
+# Rust loop and from the full legacy Python compatibility suite.
+macos-package-check:
+	$(PYTHON) -m pytest -q packaging/macos/tests/test_packaging.py
 
 export VERSION
 macos-pkg:
