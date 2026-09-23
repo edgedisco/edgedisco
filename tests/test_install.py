@@ -77,6 +77,7 @@ class InstallerTests(unittest.TestCase):
                          PYTHON_BIN=sys.executable,
                          PATH=f"{fake_bin}:{os.environ.get('PATH', '')}"),
                 input=SCRIPT, capture_output=True, text=True, timeout=10,
+                start_new_session=True,
             )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("rerun with --yes", result.stderr)

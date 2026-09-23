@@ -277,6 +277,7 @@ class CliLauncherTests(unittest.TestCase):
         cli.chmod(0o755)
         return layout, cli
 
+    @patch.dict(os.environ, {"SHELL": "/bin/zsh"})
     def test_install_creates_launcher_pointing_at_managed_cli(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -303,6 +304,7 @@ class CliLauncherTests(unittest.TestCase):
             self.assertIn(PATH_MARKER_BEGIN, text)
             self.assertIn(str(home / ".local" / "bin"), text)
 
+    @patch.dict(os.environ, {"SHELL": "/bin/zsh"})
     def test_install_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -333,6 +335,7 @@ class CliLauncherTests(unittest.TestCase):
             uninstall_cli_launcher(layout, home)
             self.assertEqual(profile.read_text(), "export TEST_KEEP=1\n")
 
+    @patch.dict(os.environ, {"SHELL": "/bin/zsh"})
     def test_uninstall_removes_launcher_and_path_block_only(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -375,6 +378,7 @@ class CliLauncherTests(unittest.TestCase):
             self.assertFalse((home / ".local" / "bin" / "edgedisco").exists())
             self.assertIn(str(home / ".local" / "bin" / "edgedisco"), result["launcher_removed"])
 
+    @patch.dict(os.environ, {"SHELL": "/bin/zsh"})
     def test_preserves_unrelated_edgedisco_command_and_uses_managed_bin(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -509,7 +513,8 @@ class ServiceLifecycleTests(unittest.TestCase):
             start_res = start_macos(root=layout.root, services=["server"], home=home)
             self.assertEqual(start_res, {SERVER_LABEL: "started"})
 
-    def test_service_validation_errors(self):
+    @patch("ai_asset_inventory.self_service.platform.system", return_value="Darwin")
+    def test_service_validation_errors(self, _system):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             layout = default_layout(home / ".edgedisco", home)

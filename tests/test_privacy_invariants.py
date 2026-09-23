@@ -7,6 +7,11 @@ from ai_asset_inventory.database import Database
 from ai_asset_inventory.otlp_encoder import encode_outbox_event
 from ai_asset_inventory.otlp_events import project_asset
 
+try:
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+except ImportError:
+    ExportLogsServiceRequest = None
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "golden_otlp"
 
 
@@ -118,10 +123,11 @@ class PrivacyInvariantsTests(unittest.TestCase):
                 for row in rows:
                     payload = row["payload_json"]
                     self.assertNotIn(canary, payload, f"Privacy leak in SQLite outbox payload! Category: {category}")
-                    # Test encoded protobuf bytes
-                    encoded = encode_outbox_event(payload)
-                    canary_bytes = canary.encode("utf-8")
-                    self.assertNotIn(canary_bytes, encoded, f"Privacy leak in Protobuf payload! Category: {category}")
+                    # Test encoded protobuf bytes if optional OTLP dependencies are installed
+                    if ExportLogsServiceRequest is not None:
+                        encoded = encode_outbox_event(payload)
+                        canary_bytes = canary.encode("utf-8")
+                        self.assertNotIn(canary_bytes, encoded, f"Privacy leak in Protobuf payload! Category: {category}")
 
 
 if __name__ == "__main__":
