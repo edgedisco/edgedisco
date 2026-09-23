@@ -856,7 +856,12 @@ def start_macos(
                 if _health(port) is not None:
                     results[label] = "already running"
                     continue
-                _launchctl("kickstart", "-k", target, check=False)
+                restarted = _launchctl("kickstart", "-k", target, check=False)
+                if restarted.returncode != 0:
+                    raise RuntimeError(
+                        f"could not restart {label}: "
+                        f"{restarted.stderr.strip() or restarted.stdout.strip()}"
+                    )
                 if values.get("AAI_ADMIN_TOKEN"):
                     _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
                 results[label] = "started"
@@ -892,7 +897,11 @@ def stop_macos(
         if state.returncode != 0:
             results[label] = "already stopped"
             continue
-        _launchctl("bootout", target, check=False)
+        stopped = _launchctl("bootout", target, check=False)
+        if stopped.returncode != 0:
+            raise RuntimeError(
+                f"could not stop {label}: {stopped.stderr.strip() or stopped.stdout.strip()}"
+            )
         if label == SERVER_LABEL and layout.env.exists():
             port = int(_parse_env(layout.env).get("EDGEDISCO_PORT", "8080"))
             deadline = time.monotonic() + 5
@@ -944,7 +953,12 @@ def start_linux(
                 if _health(port) is not None:
                     results[label] = "already running"
                     continue
-                _systemctl("restart", unit, check=False)
+                restarted = _systemctl("restart", unit, check=False)
+                if restarted.returncode != 0:
+                    raise RuntimeError(
+                        f"could not restart {label}: "
+                        f"{restarted.stderr.strip() or restarted.stdout.strip()}"
+                    )
                 if values.get("AAI_ADMIN_TOKEN"):
                     _wait_for_server(port, values["AAI_ADMIN_TOKEN"])
                 results[label] = "started"
@@ -978,7 +992,11 @@ def stop_linux(
         unit = f"{label}.service"
         state = _systemctl("is-active", unit, check=False)
         is_active = (state.stdout.strip() == "active")
-        _systemctl("stop", unit, check=False)
+        stopped = _systemctl("stop", unit, check=False)
+        if stopped.returncode != 0:
+            raise RuntimeError(
+                f"could not stop {label}: {stopped.stderr.strip() or stopped.stdout.strip()}"
+            )
         if label == SERVER_LABEL and layout.env.exists():
             port = int(_parse_env(layout.env).get("EDGEDISCO_PORT", "8080"))
             deadline = time.monotonic() + 5
